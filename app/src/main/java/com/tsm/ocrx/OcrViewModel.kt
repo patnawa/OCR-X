@@ -71,7 +71,9 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<OcrUiState> = _state.asStateFlow()
 
     private val store = SessionStore(app)
+    private val history = HistoryStore(app)
     private var nextId = 1L
+    private var sessionId = System.currentTimeMillis()
 
     init {
         store.load()?.let { r ->
@@ -107,6 +109,18 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
                         translatedText = s.translatedText,
                         pageTexts = texts
                     )
+                    // Keep the current session in the scan history too.
+                    if (texts.isNotEmpty()) {
+                        history.upsert(
+                            HistoryEntry(
+                                id = sessionId,
+                                time = System.currentTimeMillis(),
+                                pageTexts = texts,
+                                translatedText = s.translatedText,
+                                targetLangCode = s.targetLang.code
+                            )
+                        )
+                    }
                 }
             }
         }
@@ -236,5 +250,32 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
     fun reset() {
         _state.value = _state.value.copy(pages = emptyList())
         clearTranslation()
+        sessionId = System.currentTimeMillis()   // next scans become a new history entry
+    }
+
+    /* ---- Scan history ---- */
+
+    fun historyList(): List<HistoryEntry> = history.list()
+
+    fun deleteHistoryEntry(id: Long) = history.delete(id)
+
+    fun clearHistory() = history.clear()
+
+    /** Loads a past scan back into the main screen for re-export/translation. */
+    fun loadHistoryEntry(entry: HistoryEntry) {
+        sessionId = entry.id
+        val pages = entry.pageTexts.mapIndexed { i, t ->
+            Page(id = nextId + i, imageUri = null, status = OcrStatus.Done, text = t)
+        }
+        nextId += entry.pageTexts.size
+        _state.value = _state.value.copy(
+            pages = pages,
+            multiMode = _state.value.multiMode || pages.size > 1,
+            targetLang = TranslationEngine.LANGUAGES
+                .firstOrNull { it.code == entry.targetLangCode } ?: _state.value.targetLang,
+            translatedText = entry.translatedText,
+            translateStatus = if (entry.translatedText.isNotBlank()) TranslateStatus.Done
+            else TranslateStatus.Idle
+        )
     }
 }

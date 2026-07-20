@@ -89,6 +89,16 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
         return
     }
 
+    var showHistory by remember { mutableStateOf(false) }
+    if (showHistory) {
+        HistoryScreen(
+            vm = vm,
+            onLoad = { showHistory = false },
+            onClose = { showHistory = false }
+        )
+        return
+    }
+
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
     var pendingExport by remember { mutableStateOf(ExportFormat.CSV) }
     var pendingTranslated by remember { mutableStateOf(false) }
@@ -172,7 +182,8 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
             IndustrialHeader(
                 showClear = !state.isEmpty,
                 onClear = { vm.reset() },
-                onManageLanguages = { showLanguages = true }
+                onManageLanguages = { showLanguages = true },
+                onHistory = { showHistory = true }
             )
         }
     ) { padding ->
@@ -247,7 +258,12 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
  * ------------------------------------------------------------------------- */
 
 @Composable
-private fun IndustrialHeader(showClear: Boolean, onClear: () -> Unit, onManageLanguages: () -> Unit) {
+private fun IndustrialHeader(
+    showClear: Boolean,
+    onClear: () -> Unit,
+    onManageLanguages: () -> Unit,
+    onHistory: () -> Unit
+) {
     Column(Modifier.background(MaterialTheme.colorScheme.background)) {
         Row(
             modifier = Modifier
@@ -278,6 +294,8 @@ private fun IndustrialHeader(showClear: Boolean, onClear: () -> Unit, onManageLa
                     color = MaterialTheme.colorScheme.primary
                 )
             }
+            OutlinedIconButton(onClick = onHistory, icon = Icons.Filled.History, desc = "Scan history")
+            Spacer(Modifier.width(8.dp))
             OutlinedIconButton(onClick = onManageLanguages, icon = Icons.Filled.Language, desc = "Offline languages")
             if (showClear) {
                 Spacer(Modifier.width(8.dp))
