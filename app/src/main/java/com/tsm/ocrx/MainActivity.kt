@@ -78,21 +78,9 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
 
-    var liveMode by remember { mutableStateOf(false) }
-    if (liveMode) {
-        LiveTranslateScreen(target = state.targetLang, onClose = { liveMode = false })
-        return
-    }
-
     var showLanguages by remember { mutableStateOf(false) }
     if (showLanguages) {
         LanguageManagerScreen(onClose = { showLanguages = false })
-        return
-    }
-
-    var showVoice by remember { mutableStateOf(false) }
-    if (showVoice) {
-        VoiceLiveScreen(onClose = { showVoice = false })
         return
     }
 
@@ -181,11 +169,6 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
                 onCamera = ::launchCamera,
                 onGallery = ::launchGallery
             )
-
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedActionButton("LIVE TRANSLATE", Icons.Filled.CameraEnhance, Modifier.weight(1f)) { liveMode = true }
-                OutlinedActionButton("VOICE", Icons.Filled.Mic, Modifier.weight(1f)) { showVoice = true }
-            }
 
             if (state.isEmpty) {
                 WelcomePanel()
@@ -477,22 +460,6 @@ private fun SourceButtons(
     }
 }
 
-@Composable
-private fun OutlinedActionButton(label: String, icon: ImageVector, modifier: Modifier, onClick: () -> Unit) {
-    Row(
-        modifier = modifier
-            .height(50.dp)
-            .background(MaterialTheme.colorScheme.surface, ChipShape)
-            .border(BorderStroke(1.dp, MaterialTheme.colorScheme.primary), ChipShape)
-            .clickable { onClick() },
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center
-    ) {
-        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.width(8.dp))
-        Text(label, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, fontSize = 12.sp, color = MaterialTheme.colorScheme.onBackground, maxLines = 1)
-    }
-}
 
 @Composable
 private fun WelcomePanel() {
