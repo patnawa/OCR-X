@@ -1,4 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.OCRX" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!-- Dark AppCompat theme for the crop screen. Needs an action bar — the
+         cropper's confirm (crop) button is an action-bar menu item. -->
+    <style name="Theme.OCRX.Crop" parent="Theme.AppCompat">
+        <item name="colorPrimary">#171A1F</item>
+        <item name="colorPrimaryDark">#0F1114</item>
+        <item name="colorAccent">#FF7A18</item>
+        <item name="android:windowBackground">#0F1114</item>
+    </style>
 </resources>

@@ -12,6 +12,7 @@ import org.json.JSONObject
 data class RestoredSession(
     val multiMode: Boolean,
     val mode: OcrMode,
+    val cropEnabled: Boolean,
     val targetLang: Language,
     val translationMode: TranslationMode,
     val translatedText: String,
@@ -32,6 +33,7 @@ class SessionStore(context: Context) {
     fun save(
         multiMode: Boolean,
         mode: OcrMode,
+        cropEnabled: Boolean,
         targetLang: Language,
         translationMode: TranslationMode,
         translatedText: String,
@@ -40,6 +42,7 @@ class SessionStore(context: Context) {
         val json = JSONObject()
             .put("multiMode", multiMode)
             .put("ocrMode", mode.name)
+            .put("crop", cropEnabled)
             .put("targetLang", targetLang.code)
             .put("mode", translationMode.name)
             .put("translated", translatedText)
@@ -61,6 +64,7 @@ class SessionStore(context: Context) {
                 multiMode = json.optBoolean("multiMode", false),
                 mode = runCatching { OcrMode.valueOf(json.optString("ocrMode")) }
                     .getOrDefault(OcrMode.QUALITY),
+                cropEnabled = json.optBoolean("crop", true),
                 targetLang = TranslationEngine.LANGUAGES
                     .firstOrNull { it.code == json.optString("targetLang") }
                     ?: TranslationEngine.LANGUAGES.first(),

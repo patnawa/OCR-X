@@ -77,6 +77,11 @@ dependencies {
     // Image loading for previews.
     implementation("io.coil-kt:coil-compose:2.7.0")
 
+    // Crop-before-OCR editor (CanHub cropper, maintained fork). Its activity
+    // needs an AppCompat theme, hence the appcompat dependency.
+    implementation("com.vanniktech:android-image-cropper:4.6.0")
+    implementation("androidx.appcompat:appcompat:1.7.0")
+
     // PP-OCRv6 on-device engine (ONNX Runtime + OpenCV pipeline).
     implementation(project(":ppocr-sdk"))
 

@@ -1,6 +1,7 @@
 package com.tsm.ocrx
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -37,6 +38,10 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import com.canhub.cropper.CropImageContract
+import com.canhub.cropper.CropImageContractOptions
+import com.canhub.cropper.CropImageOptions
+import com.canhub.cropper.CropImageView
 import com.tsm.ocrx.export.ExportFormat
 import com.tsm.ocrx.export.Exporters
 import com.tsm.ocrx.ocr.OcrMode
@@ -88,13 +93,38 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
     var pendingExport by remember { mutableStateOf(ExportFormat.CSV) }
     var pendingTranslated by remember { mutableStateOf(false) }
 
+    // Crop step: after capture/pick, let the user drag a box over the text area
+    // so OCR only sees what matters. Skippable via the settings toggle.
+    val cropLauncher = rememberLauncherForActivityResult(CropImageContract()) { result ->
+        if (result.isSuccessful) result.uriContent?.let { vm.onImagePicked(it) }
+    }
+
+    fun onImageReady(uri: Uri) {
+        if (state.cropEnabled) {
+            cropLauncher.launch(
+                CropImageContractOptions(
+                    uri,
+                    CropImageOptions(
+                        guidelines = CropImageView.Guidelines.ON,
+                        activityTitle = "CROP TEXT AREA",
+                        activityBackgroundColor = 0xFF0F1114.toInt(),
+                        outputCompressFormat = Bitmap.CompressFormat.JPEG,
+                        outputCompressQuality = 95
+                    )
+                )
+            )
+        } else {
+            vm.onImagePicked(uri)
+        }
+    }
+
     val galleryLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
-    ) { uri -> if (uri != null) vm.onImagePicked(uri) }
+    ) { uri -> if (uri != null) onImageReady(uri) }
 
     val cameraLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicture()
-    ) { ok -> if (ok) pendingCameraUri?.let { vm.onImagePicked(it) } }
+    ) { ok -> if (ok) pendingCameraUri?.let { onImageReady(it) } }
 
     fun exportTo(format: ExportFormat, target: Uri) {
         scope.launch {
@@ -157,6 +187,8 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
             SettingsPanel(
                 mode = state.mode,
                 onModeChange = { vm.setMode(it) },
+                cropEnabled = state.cropEnabled,
+                onCropToggle = { vm.setCropEnabled(it) },
                 multiMode = state.multiMode,
                 onMultiToggle = { vm.setMultiMode(it) }
             )
@@ -322,6 +354,8 @@ private fun SectionLabel(text: String, trailing: String? = null) {
 private fun SettingsPanel(
     mode: OcrMode,
     onModeChange: (OcrMode) -> Unit,
+    cropEnabled: Boolean,
+    onCropToggle: (Boolean) -> Unit,
     multiMode: Boolean,
     onMultiToggle: (Boolean) -> Unit
 ) {
@@ -336,6 +370,8 @@ private fun SettingsPanel(
             }
         }
         Spacer(Modifier.height(14.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+        ToggleRow(Icons.Filled.Crop, "Crop before scan", "Select just the text area", cropEnabled, onCropToggle)
         HorizontalDivider(color = MaterialTheme.colorScheme.outline)
         ToggleRow(Icons.Filled.Layers, "Multi-capture", "Scan several · export as one", multiMode, onMultiToggle)
     }

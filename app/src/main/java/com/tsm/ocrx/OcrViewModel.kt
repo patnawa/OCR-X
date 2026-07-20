@@ -42,6 +42,7 @@ data class Page(
 data class OcrUiState(
     val multiMode: Boolean = false,
     val mode: OcrMode = OcrMode.QUALITY,
+    val cropEnabled: Boolean = true,
     val pages: List<Page> = emptyList(),
     val targetLang: Language = TranslationEngine.LANGUAGES.first(),
     val translationMode: TranslationMode = TranslationMode.OFFLINE,
@@ -81,6 +82,7 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = OcrUiState(
                 multiMode = r.multiMode,
                 mode = r.mode,
+                cropEnabled = r.cropEnabled,
                 pages = pages,
                 targetLang = r.targetLang,
                 translationMode = r.translationMode,
@@ -99,6 +101,7 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
                     store.save(
                         multiMode = s.multiMode,
                         mode = s.mode,
+                        cropEnabled = s.cropEnabled,
                         targetLang = s.targetLang,
                         translationMode = s.translationMode,
                         translatedText = s.translatedText,
@@ -115,6 +118,10 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setMode(mode: OcrMode) {
         _state.value = _state.value.copy(mode = mode)
+    }
+
+    fun setCropEnabled(enabled: Boolean) {
+        _state.value = _state.value.copy(cropEnabled = enabled)
     }
 
     fun setTargetLang(lang: Language) {
