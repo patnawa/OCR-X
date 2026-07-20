@@ -23,20 +23,23 @@ class LiveTranslator(private val targetCode: String) {
     private val languageId = LanguageIdentification.getClient()
 
     suspend fun translate(text: String): String {
+        // Detect the source language ONCE from the whole block — far more reliable
+        // than detecting each short line, which caused some lines to be skipped.
+        val source = detect(text)
+        if (source == null || source == targetCode) return text
+        val translator = translatorFor(source) ?: return text
+
         val sb = StringBuilder()
         val lines = text.split('\n')
         for ((i, line) in lines.withIndex()) {
             if (i > 0) sb.append('\n')
-            sb.append(if (line.isBlank()) line else translateLine(line))
+            sb.append(if (line.isBlank()) line else translateLine(line, translator))
         }
         return sb.toString()
     }
 
-    private suspend fun translateLine(line: String): String {
+    private suspend fun translateLine(line: String, translator: Translator): String {
         cache[line]?.let { return it }
-        val source = detect(line) ?: return line
-        if (source == targetCode) return line
-        val translator = translatorFor(source) ?: return line
         return try {
             val result = translator.translate(line).await()
             cache[line] = result
