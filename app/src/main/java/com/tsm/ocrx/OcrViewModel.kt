@@ -9,6 +9,7 @@ import com.tsm.ocrx.ocr.OcrEngine
 import com.tsm.ocrx.ocr.OcrEngineType
 import com.tsm.ocrx.translate.Language
 import com.tsm.ocrx.translate.TranslationEngine
+import com.tsm.ocrx.translate.TranslationMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -41,6 +42,7 @@ data class OcrUiState(
     val engine: OcrEngineType = OcrEngineType.PP_OCR_V6,
     val pages: List<Page> = emptyList(),
     val targetLang: Language = TranslationEngine.LANGUAGES.first(),
+    val translationMode: TranslationMode = TranslationMode.OFFLINE,
     val translateStatus: TranslateStatus = TranslateStatus.Idle,
     val translatedText: String = ""
 ) {
@@ -87,6 +89,14 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    fun setTranslationMode(mode: TranslationMode) {
+        _state.value = _state.value.copy(
+            translationMode = mode,
+            translateStatus = TranslateStatus.Idle,
+            translatedText = ""
+        )
+    }
+
     fun onTranslatedTextChanged(newText: String) {
         _state.value = _state.value.copy(translatedText = newText)
     }
@@ -102,7 +112,7 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
         )
         viewModelScope.launch {
             try {
-                val result = TranslationEngine.translate(source, target) { stage ->
+                val result = TranslationEngine.translate(source, target, _state.value.translationMode) { stage ->
                     _state.value = _state.value.copy(translateStatus = TranslateStatus.Running(stage))
                 }
                 _state.value = _state.value.copy(

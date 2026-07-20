@@ -57,6 +57,7 @@ dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.activity:activity-compose:1.9.3")
 
@@ -79,6 +80,13 @@ dependencies {
 
     // Image loading for previews.
     implementation("io.coil-kt:coil-compose:2.7.0")
+
+    // CameraX — live/realtime translation preview.
+    val camerax = "1.4.1"
+    implementation("androidx.camera:camera-core:$camerax")
+    implementation("androidx.camera:camera-camera2:$camerax")
+    implementation("androidx.camera:camera-lifecycle:$camerax")
+    implementation("androidx.camera:camera-view:$camerax")
 
     // PP-OCRv6 on-device engine (ONNX Runtime + OpenCV pipeline).
     implementation(project(":ppocr-sdk"))

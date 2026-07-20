@@ -12,6 +12,12 @@ import kotlin.coroutines.resumeWithException
 
 data class Language(val name: String, val code: String)
 
+/** Where translation runs: on-device model, or cloud service. */
+enum class TranslationMode(val label: String) {
+    OFFLINE("Offline"),
+    ONLINE("Online")
+}
+
 /**
  * On-device text translation via ML Kit. The source language is auto-detected;
  * the model for a source→target pair downloads once (needs network) and then
@@ -58,7 +64,20 @@ object TranslationEngine {
     suspend fun translate(
         text: String,
         targetCode: String,
+        mode: TranslationMode,
         onStage: (String) -> Unit = {}
+    ): String {
+        if (mode == TranslationMode.ONLINE) {
+            onStage("Translating online…")
+            return OnlineTranslator.translate(text, targetCode)
+        }
+        return translateOffline(text, targetCode, onStage)
+    }
+
+    private suspend fun translateOffline(
+        text: String,
+        targetCode: String,
+        onStage: (String) -> Unit
     ): String {
         val sourceCode = detectSource(text)
         if (sourceCode == targetCode) return text

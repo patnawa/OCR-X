@@ -23,6 +23,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -41,6 +42,7 @@ import com.tsm.ocrx.export.Exporters
 import com.tsm.ocrx.ocr.OcrEngineType
 import com.tsm.ocrx.translate.Language
 import com.tsm.ocrx.translate.TranslationEngine
+import com.tsm.ocrx.translate.TranslationMode
 import com.tsm.ocrx.ui.theme.ChipShape
 import com.tsm.ocrx.ui.theme.OcrXTheme
 import com.tsm.ocrx.ui.theme.PanelShape
@@ -75,6 +77,12 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+
+    var liveMode by remember { mutableStateOf(false) }
+    if (liveMode) {
+        LiveTranslateScreen(target = state.targetLang, onClose = { liveMode = false })
+        return
+    }
 
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
     var pendingExport by remember { mutableStateOf(ExportFormat.CSV) }
@@ -156,6 +164,8 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
                 onGallery = ::launchGallery
             )
 
+            LiveTranslateButton(onClick = { liveMode = true })
+
             if (state.isEmpty) {
                 WelcomePanel()
             } else {
@@ -182,8 +192,10 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
 
                     TranslationPanel(
                         targetLang = state.targetLang,
+                        mode = state.translationMode,
                         status = state.translateStatus,
                         translatedText = state.translatedText,
+                        onModeChange = { vm.setTranslationMode(it) },
                         onTargetChange = { vm.setTargetLang(it) },
                         onTranslate = { vm.translate() },
                         onTranslatedChange = { vm.onTranslatedTextChanged(it) },
@@ -443,6 +455,24 @@ private fun SourceButtons(
 }
 
 @Composable
+private fun LiveTranslateButton(onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(50.dp)
+            .background(MaterialTheme.colorScheme.surface, ChipShape)
+            .border(BorderStroke(1.dp, MaterialTheme.colorScheme.primary), ChipShape)
+            .clickable { onClick() },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center
+    ) {
+        Icon(Icons.Filled.CameraEnhance, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(10.dp))
+        Text("LIVE TRANSLATE", fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp, fontSize = 13.sp, color = MaterialTheme.colorScheme.onBackground)
+    }
+}
+
+@Composable
 private fun WelcomePanel() {
     IndustrialPanel {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -603,8 +633,10 @@ private fun ExportGrid(onExport: (ExportFormat) -> Unit) {
 @Composable
 private fun TranslationPanel(
     targetLang: Language,
+    mode: TranslationMode,
     status: TranslateStatus,
     translatedText: String,
+    onModeChange: (TranslationMode) -> Unit,
     onTargetChange: (Language) -> Unit,
     onTranslate: () -> Unit,
     onTranslatedChange: (String) -> Unit,
@@ -614,7 +646,9 @@ private fun TranslationPanel(
     val clipboard = LocalClipboardManager.current
     Spacer(Modifier.height(16.dp))
     IndustrialPanel {
-        SectionLabel("Translate", "on-device")
+        SectionLabel("Translate", if (mode == TranslationMode.ONLINE) "cloud" else "on-device")
+        Spacer(Modifier.height(10.dp))
+        ModeToggle(mode, onModeChange)
         Spacer(Modifier.height(10.dp))
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -677,6 +711,41 @@ private fun TranslationPanel(
         }
     }
     Spacer(Modifier.height(8.dp))
+}
+
+@Composable
+private fun ModeToggle(mode: TranslationMode, onChange: (TranslationMode) -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceVariant, ChipShape)
+            .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline), ChipShape)
+            .padding(3.dp)
+    ) {
+        TranslationMode.entries.forEach { m ->
+            val selected = m == mode
+            Box(
+                Modifier
+                    .weight(1f)
+                    .background(
+                        if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                        ChipShape
+                    )
+                    .clickable { onChange(m) }
+                    .padding(vertical = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    m.label.uppercase(),
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp,
+                    letterSpacing = 1.sp,
+                    color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
 }
 
 @Composable
