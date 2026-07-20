@@ -81,6 +81,9 @@ dependencies {
     // Image loading for previews.
     implementation("io.coil-kt:coil-compose:2.7.0")
 
+    // WebSocket client for the Gemini Live API (realtime voice).
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
     // CameraX — live/realtime translation preview.
     val camerax = "1.4.1"
     implementation("androidx.camera:camera-core:$camerax")

@@ -90,6 +90,12 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
         return
     }
 
+    var showVoice by remember { mutableStateOf(false) }
+    if (showVoice) {
+        VoiceLiveScreen(onClose = { showVoice = false })
+        return
+    }
+
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
     var pendingExport by remember { mutableStateOf(ExportFormat.CSV) }
     var pendingTranslated by remember { mutableStateOf(false) }
@@ -176,7 +182,10 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
                 onGallery = ::launchGallery
             )
 
-            LiveTranslateButton(onClick = { liveMode = true })
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedActionButton("LIVE TRANSLATE", Icons.Filled.CameraEnhance, Modifier.weight(1f)) { liveMode = true }
+                OutlinedActionButton("VOICE", Icons.Filled.Mic, Modifier.weight(1f)) { showVoice = true }
+            }
 
             if (state.isEmpty) {
                 WelcomePanel()
@@ -469,10 +478,9 @@ private fun SourceButtons(
 }
 
 @Composable
-private fun LiveTranslateButton(onClick: () -> Unit) {
+private fun OutlinedActionButton(label: String, icon: ImageVector, modifier: Modifier, onClick: () -> Unit) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
+        modifier = modifier
             .height(50.dp)
             .background(MaterialTheme.colorScheme.surface, ChipShape)
             .border(BorderStroke(1.dp, MaterialTheme.colorScheme.primary), ChipShape)
@@ -480,9 +488,9 @@ private fun LiveTranslateButton(onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center
     ) {
-        Icon(Icons.Filled.CameraEnhance, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.width(10.dp))
-        Text("LIVE TRANSLATE", fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp, fontSize = 13.sp, color = MaterialTheme.colorScheme.onBackground)
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(label, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, fontSize = 12.sp, color = MaterialTheme.colorScheme.onBackground, maxLines = 1)
     }
 }
 
