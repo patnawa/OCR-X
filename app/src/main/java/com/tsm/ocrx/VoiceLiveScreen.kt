@@ -14,6 +14,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.VpnKey
@@ -31,6 +33,7 @@ import androidx.core.content.ContextCompat
 import com.tsm.ocrx.ui.theme.ChipShape
 import com.tsm.ocrx.ui.theme.PanelShape
 import com.tsm.ocrx.voice.GeminiLiveClient
+import com.tsm.ocrx.voice.GeminiModels
 import com.tsm.ocrx.voice.VoiceSettings
 import com.tsm.ocrx.voice.VoiceStatus
 import kotlinx.coroutines.coroutineScope
@@ -156,6 +159,33 @@ private fun KeyEditor(
     onSave: () -> Unit,
     onCancel: () -> Unit
 ) {
+    val scope = rememberCoroutineScope()
+    var models by remember { mutableStateOf<List<String>>(emptyList()) }
+    var loading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    fun loadModels() {
+        scope.launch {
+            loading = true
+            error = null
+            try {
+                val list = GeminiModels.listLiveModels(apiKey)
+                models = list
+                if (list.isNotEmpty() && model !in list) {
+                    val best = list.firstOrNull { it.contains("native-audio", true) }
+                        ?: list.firstOrNull { it.contains("live", true) }
+                        ?: list.first()
+                    onModelChange(best)
+                }
+                if (list.isEmpty()) error = "No models returned for this key"
+            } catch (t: Throwable) {
+                error = t.message ?: "Couldn't load models"
+            } finally {
+                loading = false
+            }
+        }
+    }
+
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("Enter your Google AI Studio (Gemini) API key. It is stored only on this device.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
         OutlinedTextField(
@@ -167,15 +197,41 @@ private fun KeyEditor(
             modifier = Modifier.fillMaxWidth(),
             shape = ChipShape
         )
-        OutlinedTextField(
-            value = model,
-            onValueChange = onModelChange,
-            label = { Text("Model") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            shape = ChipShape
-        )
-        Text("Default model: ${VoiceSettings.DEFAULT_MODEL}. Get a key at aistudio.google.com.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+
+        // Load the live-capable models available to this key.
+        OutlinedButton(
+            onClick = { loadModels() },
+            enabled = apiKey.isNotBlank() && !loading,
+            shape = ChipShape,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary),
+            modifier = Modifier.fillMaxWidth().height(48.dp)
+        ) {
+            if (loading) {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
+            } else {
+                Icon(Icons.Filled.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+            }
+            Spacer(Modifier.width(8.dp))
+            Text("LOAD MODELS FROM GOOGLE", fontWeight = FontWeight.Bold, letterSpacing = 1.sp, fontSize = 12.sp)
+        }
+
+        if (models.isNotEmpty()) {
+            ModelDropdown(models = models, selected = model, onSelect = onModelChange)
+        } else {
+            OutlinedTextField(
+                value = model,
+                onValueChange = onModelChange,
+                label = { Text("Model (or load list above)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                shape = ChipShape
+            )
+        }
+
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontFamily = FontFamily.Monospace, fontSize = 11.sp) }
+        Text("Get a key at aistudio.google.com. Loading needs internet.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Button(
                 onClick = onSave,
@@ -191,6 +247,37 @@ private fun KeyEditor(
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                     modifier = Modifier.weight(1f).height(50.dp)
                 ) { Text("CANCEL", color = MaterialTheme.colorScheme.onBackground) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModelDropdown(models: List<String>, selected: String, onSelect: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .height(56.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant, ChipShape)
+                .border(BorderStroke(1.dp, MaterialTheme.colorScheme.primary), ChipShape)
+                .clickable { expanded = true }
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("MODEL · ${models.size} available", fontFamily = FontFamily.Monospace, fontSize = 9.sp, letterSpacing = 1.sp, color = MaterialTheme.colorScheme.primary)
+                Text(selected.ifBlank { "Select a model" }, color = MaterialTheme.colorScheme.onBackground, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            }
+            Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            models.forEach { m ->
+                DropdownMenuItem(
+                    text = { Text(m, fontFamily = FontFamily.Monospace, fontSize = 13.sp) },
+                    onClick = { onSelect(m); expanded = false }
+                )
             }
         }
     }
