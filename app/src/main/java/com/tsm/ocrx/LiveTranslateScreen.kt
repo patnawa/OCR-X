@@ -12,6 +12,7 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -106,6 +107,7 @@ fun LiveTranslateScreen(target: Language, onClose: () -> Unit) {
 private fun LiveContent(target: Language) {
     var recognized by remember { mutableStateOf("") }
     var translated by remember { mutableStateOf("") }
+    var paused by remember { mutableStateOf(false) }
     val translator = remember(target.code) { LiveTranslator(target.code) }
 
     DisposableEffect(target.code) {
@@ -113,25 +115,46 @@ private fun LiveContent(target: Language) {
     }
 
     LaunchedEffect(recognized, target.code) {
-        if (recognized.isBlank()) {
-            translated = ""
-            return@LaunchedEffect
-        }
-        delay(300) // settle before translating
+        if (recognized.isBlank()) return@LaunchedEffect
+        delay(250) // settle before translating
         translated = translator.translate(recognized)
     }
 
     Column(Modifier.fillMaxSize()) {
-        CameraPreview(
-            onText = { recognized = it },
-            modifier = Modifier.fillMaxWidth().weight(1f)
-        )
-        LivePanel(recognized = recognized, translated = translated)
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .clickable { paused = !paused }
+        ) {
+            CameraPreview(
+                onText = { recognized = it },
+                paused = paused,
+                modifier = Modifier.fillMaxSize()
+            )
+            // Freeze/pause indicator.
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(12.dp)
+                    .background(Color(0xCC0F1114), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    if (paused) "❚❚  PAUSED — tap to resume" else "▶  LIVE — tap to freeze",
+                    color = if (paused) Color(0xFFFF7A18) else Color.White,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+        LivePanel(recognized = recognized, translated = translated, paused = paused)
     }
 }
 
 @Composable
-private fun LivePanel(recognized: String, translated: String) {
+private fun LivePanel(recognized: String, translated: String, paused: Boolean) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -141,7 +164,11 @@ private fun LivePanel(recognized: String, translated: String) {
             .padding(16.dp)
             .verticalScroll(rememberScrollState())
     ) {
-        Text("DETECTED", fontFamily = FontFamily.Monospace, fontSize = 10.sp, letterSpacing = 1.sp, color = Color(0xFF8A96A3))
+        Text(
+            if (paused) "DETECTED · FROZEN" else "DETECTED",
+            fontFamily = FontFamily.Monospace, fontSize = 10.sp, letterSpacing = 1.sp,
+            color = if (paused) Color(0xFFFF7A18) else Color(0xFF8A96A3)
+        )
         Spacer(Modifier.height(4.dp))
         Text(
             recognized.ifBlank { "Point the camera at text…" },
@@ -165,13 +192,24 @@ private fun LivePanel(recognized: String, translated: String) {
     }
 }
 
+/** Only emit text once it has been read identically twice in a row (anti-flicker). */
+private class Stabilizer {
+    var pending = ""
+    var count = 0
+    var emitted = ""
+}
+
+private const val THROTTLE_MS = 1000L
+
 @Composable
-private fun CameraPreview(onText: (String) -> Unit, modifier: Modifier) {
-    val context = LocalContext.current
+private fun CameraPreview(onText: (String) -> Unit, paused: Boolean, modifier: Modifier) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val recognizer = remember { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
     val executor = remember { Executors.newSingleThreadExecutor() }
-    var lastRun by remember { mutableStateOf(0L) }
+    val lastRun = remember { java.util.concurrent.atomic.AtomicLong(0L) }
+    val stabilizer = remember { Stabilizer() }
+    val pausedState = rememberUpdatedState(paused)
+    val onTextState = rememberUpdatedState(onText)
 
     DisposableEffect(Unit) {
         onDispose {
@@ -197,12 +235,25 @@ private fun CameraPreview(onText: (String) -> Unit, modifier: Modifier) {
                     .build()
                 analysis.setAnalyzer(executor) { proxy ->
                     val now = System.currentTimeMillis()
-                    if (now - lastRun < 500) {
+                    if (pausedState.value || now - lastRun.get() < THROTTLE_MS) {
                         proxy.close()
                         return@setAnalyzer
                     }
-                    lastRun = now
-                    processFrame(proxy, recognizer, onText)
+                    lastRun.set(now)
+                    processFrame(proxy, recognizer) { text ->
+                        // Require the same reading twice before showing it, so
+                        // frame-to-frame OCR jitter doesn't make the panel flicker.
+                        if (text == stabilizer.pending) {
+                            stabilizer.count++
+                        } else {
+                            stabilizer.pending = text
+                            stabilizer.count = 1
+                        }
+                        if (stabilizer.count >= 2 && text != stabilizer.emitted) {
+                            stabilizer.emitted = text
+                            onTextState.value(text)
+                        }
+                    }
                 }
                 provider.unbindAll()
                 provider.bindToLifecycle(
