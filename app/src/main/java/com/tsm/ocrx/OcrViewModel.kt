@@ -13,7 +13,10 @@ import com.tsm.ocrx.translate.TranslationMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 sealed interface OcrStatus {
     data object Processing : OcrStatus
@@ -31,7 +34,7 @@ sealed interface TranslateStatus {
 /** One scanned image and the (possibly edited) text recognized from it. */
 data class Page(
     val id: Long,
-    val imageUri: Uri,
+    val imageUri: Uri?,   // null when restored from storage (thumbnail not persisted)
     val status: OcrStatus,
     val text: String = ""
 )
@@ -67,7 +70,47 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(OcrUiState())
     val state: StateFlow<OcrUiState> = _state.asStateFlow()
 
+    private val store = SessionStore(app)
     private var nextId = 1L
+
+    init {
+        store.load()?.let { r ->
+            val pages = r.pageTexts.mapIndexed { i, t ->
+                Page(id = (i + 1).toLong(), imageUri = null, status = OcrStatus.Done, text = t)
+            }
+            nextId = pages.size + 1L
+            _state.value = OcrUiState(
+                multiMode = r.multiMode,
+                enhance = r.enhance,
+                engine = r.engine,
+                pages = pages,
+                targetLang = r.targetLang,
+                translationMode = r.translationMode,
+                translateStatus = if (r.translatedText.isNotBlank()) TranslateStatus.Done else TranslateStatus.Idle,
+                translatedText = r.translatedText
+            )
+        }
+        // Persist on every change (skip the initial value) so the session survives
+        // the process being killed in the background.
+        viewModelScope.launch {
+            state.drop(1).collect { s ->
+                val texts = s.pages
+                    .filter { it.status is OcrStatus.Done && it.text.isNotBlank() }
+                    .map { it.text }
+                withContext(Dispatchers.IO) {
+                    store.save(
+                        multiMode = s.multiMode,
+                        enhance = s.enhance,
+                        engine = s.engine,
+                        targetLang = s.targetLang,
+                        translationMode = s.translationMode,
+                        translatedText = s.translatedText,
+                        pageTexts = texts
+                    )
+                }
+            }
+        }
+    }
 
     fun setMultiMode(enabled: Boolean) {
         _state.value = _state.value.copy(multiMode = enabled)

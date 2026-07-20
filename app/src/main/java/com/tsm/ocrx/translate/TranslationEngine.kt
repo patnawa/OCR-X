@@ -79,7 +79,11 @@ object TranslationEngine {
         targetCode: String,
         onStage: (String) -> Unit
     ): String {
-        val sourceCode = detectSource(text)
+        // Detect the source. If detection lands on the target language (common with
+        // short OCR text — it mis-detects), assume English so we still translate
+        // instead of returning the text unchanged.
+        var sourceCode = detectSource(text)
+        if (sourceCode == targetCode) sourceCode = TranslateLanguage.ENGLISH
         if (sourceCode == targetCode) return text
 
         val options = TranslatorOptions.Builder()

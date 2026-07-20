@@ -497,14 +497,20 @@ private fun PageCard(
             Box(
                 Modifier
                     .size(64.dp)
-                    .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline), ChipShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant, ChipShape)
+                    .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline), ChipShape),
+                contentAlignment = Alignment.Center
             ) {
-                AsyncImage(
-                    model = page.imageUri,
-                    contentDescription = "Scan $index",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
+                if (page.imageUri != null) {
+                    AsyncImage(
+                        model = page.imageUri,
+                        contentDescription = "Scan $index",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Icon(Icons.Filled.Description, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(28.dp))
+                }
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
