@@ -6,7 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.tsm.ocrx.model.OcrResult
 import com.tsm.ocrx.ocr.OcrEngine
-import com.tsm.ocrx.ocr.OcrEngineType
+import com.tsm.ocrx.ocr.OcrMode
 import com.tsm.ocrx.translate.Language
 import com.tsm.ocrx.translate.TranslationEngine
 import com.tsm.ocrx.translate.TranslationMode
@@ -41,8 +41,7 @@ data class Page(
 
 data class OcrUiState(
     val multiMode: Boolean = false,
-    val enhance: Boolean = true,
-    val engine: OcrEngineType = OcrEngineType.PP_OCR_V6,
+    val mode: OcrMode = OcrMode.QUALITY,
     val pages: List<Page> = emptyList(),
     val targetLang: Language = TranslationEngine.LANGUAGES.first(),
     val translationMode: TranslationMode = TranslationMode.OFFLINE,
@@ -81,8 +80,7 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
             nextId = pages.size + 1L
             _state.value = OcrUiState(
                 multiMode = r.multiMode,
-                enhance = r.enhance,
-                engine = r.engine,
+                mode = r.mode,
                 pages = pages,
                 targetLang = r.targetLang,
                 translationMode = r.translationMode,
@@ -100,8 +98,7 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
                 withContext(Dispatchers.IO) {
                     store.save(
                         multiMode = s.multiMode,
-                        enhance = s.enhance,
-                        engine = s.engine,
+                        mode = s.mode,
                         targetLang = s.targetLang,
                         translationMode = s.translationMode,
                         translatedText = s.translatedText,
@@ -116,12 +113,8 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(multiMode = enabled)
     }
 
-    fun setEnhance(enabled: Boolean) {
-        _state.value = _state.value.copy(enhance = enabled)
-    }
-
-    fun setEngine(engine: OcrEngineType) {
-        _state.value = _state.value.copy(engine = engine)
+    fun setMode(mode: OcrMode) {
+        _state.value = _state.value.copy(mode = mode)
     }
 
     fun setTargetLang(lang: Language) {
@@ -203,7 +196,7 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
             }
             try {
                 val recognized = OcrEngine.recognize(
-                    getApplication(), uri, _state.value.engine, _state.value.enhance
+                    getApplication(), uri, _state.value.mode
                 )
                 update(OcrStatus.Done, recognized)
             } catch (e: Exception) {

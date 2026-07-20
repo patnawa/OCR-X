@@ -3,42 +3,25 @@ package com.tsm.ocrx.ocr
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Canvas
-import android.graphics.ColorMatrix
-import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
-import android.graphics.Paint
 import android.net.Uri
 import androidx.exifinterface.media.ExifInterface
 import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
- * Prepares a photo for OCR. Two entry points:
- *
- *  - [decodeOriented]: full-colour, EXIF-corrected bitmap capped to a long edge.
- *    Used by PP-OCRv6, which does its own preprocessing and expects natural colour.
- *  - [processForMlKit]: additionally normalizes resolution and applies grayscale +
- *    contrast, which helps ML Kit on low-quality photos.
+ * Decodes a photo for OCR: full-colour, EXIF-corrected, long edge capped.
+ * PP-OCRv6 does its own preprocessing and expects natural colour, so no
+ * grayscale/contrast tricks here — correct orientation and resolution are
+ * what matter.
  */
 object ImagePreprocessor {
-
-    private const val ML_LONG_EDGE_MIN = 1400
-    private const val ML_LONG_EDGE_MAX = 2600
-    private const val CONTRAST = 1.35f
 
     /** Decoded, upright, colour bitmap with its long edge capped at [maxLongEdge]. */
     fun decodeOriented(context: Context, uri: Uri, maxLongEdge: Int = 4000): Bitmap {
         val decoded = decodeSampled(context, uri, maxLongEdge * 2)
         val upright = applyExifOrientation(context, uri, decoded)
         return capLongEdge(upright, maxLongEdge)
-    }
-
-    /** Enhanced bitmap tuned for ML Kit: oriented, resolution-normalized, grayscale+contrast. */
-    fun processForMlKit(context: Context, uri: Uri): Bitmap {
-        val oriented = decodeOriented(context, uri, 4000)
-        val sized = normalizeRange(oriented, ML_LONG_EDGE_MIN, ML_LONG_EDGE_MAX)
-        return enhance(sized)
     }
 
     private fun decodeSampled(context: Context, uri: Uri, ceiling: Int): Bitmap {
@@ -92,39 +75,5 @@ object ImagePreprocessor {
             (bitmap.height * ratio).roundToInt().coerceAtLeast(1),
             true
         )
-    }
-
-    /** Scales so the long edge falls within [min]..[max] (upscales small, shrinks large). */
-    private fun normalizeRange(bitmap: Bitmap, min: Int, max: Int): Bitmap {
-        val longest = max(bitmap.width, bitmap.height)
-        val target = longest.coerceIn(min, max)
-        if (target == longest) return bitmap
-        val ratio = target.toFloat() / longest
-        return Bitmap.createScaledBitmap(
-            bitmap,
-            (bitmap.width * ratio).roundToInt().coerceAtLeast(1),
-            (bitmap.height * ratio).roundToInt().coerceAtLeast(1),
-            true
-        )
-    }
-
-    private fun enhance(bitmap: Bitmap): Bitmap {
-        val out = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
-        val grayscale = ColorMatrix().apply { setSaturation(0f) }
-        val t = (-0.5f * CONTRAST + 0.5f) * 255f
-        val contrast = ColorMatrix(
-            floatArrayOf(
-                CONTRAST, 0f, 0f, 0f, t,
-                0f, CONTRAST, 0f, 0f, t,
-                0f, 0f, CONTRAST, 0f, t,
-                0f, 0f, 0f, 1f, 0f
-            )
-        )
-        grayscale.postConcat(contrast)
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            colorFilter = ColorMatrixColorFilter(grayscale)
-        }
-        Canvas(out).drawBitmap(bitmap, 0f, 0f, paint)
-        return out
     }
 }

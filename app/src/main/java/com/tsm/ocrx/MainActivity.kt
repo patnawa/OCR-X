@@ -39,7 +39,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.tsm.ocrx.export.ExportFormat
 import com.tsm.ocrx.export.Exporters
-import com.tsm.ocrx.ocr.OcrEngineType
+import com.tsm.ocrx.ocr.OcrMode
 import com.tsm.ocrx.translate.Language
 import com.tsm.ocrx.translate.TranslationEngine
 import com.tsm.ocrx.translate.TranslationMode
@@ -155,12 +155,10 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             SettingsPanel(
-                engine = state.engine,
-                onEngineChange = { vm.setEngine(it) },
+                mode = state.mode,
+                onModeChange = { vm.setMode(it) },
                 multiMode = state.multiMode,
-                onMultiToggle = { vm.setMultiMode(it) },
-                enhance = state.enhance,
-                onEnhanceToggle = { vm.setEnhance(it) }
+                onMultiToggle = { vm.setMultiMode(it) }
             )
 
             SourceButtons(
@@ -322,36 +320,30 @@ private fun SectionLabel(text: String, trailing: String? = null) {
 
 @Composable
 private fun SettingsPanel(
-    engine: OcrEngineType,
-    onEngineChange: (OcrEngineType) -> Unit,
+    mode: OcrMode,
+    onModeChange: (OcrMode) -> Unit,
     multiMode: Boolean,
-    onMultiToggle: (Boolean) -> Unit,
-    enhance: Boolean,
-    onEnhanceToggle: (Boolean) -> Unit
+    onMultiToggle: (Boolean) -> Unit
 ) {
     IndustrialPanel {
-        SectionLabel("Engine")
+        SectionLabel("Scan mode", "PP-OCRv6")
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            OcrEngineType.entries.forEach { type ->
-                EngineChip(type = type, selected = type == engine, modifier = Modifier.weight(1f)) {
-                    onEngineChange(type)
+            OcrMode.entries.forEach { m ->
+                ModeChip(mode = m, selected = m == mode, modifier = Modifier.weight(1f)) {
+                    onModeChange(m)
                 }
             }
         }
         Spacer(Modifier.height(14.dp))
         HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-        if (engine == OcrEngineType.ML_KIT) {
-            ToggleRow(Icons.Filled.AutoFixHigh, "Enhance image", "Orient · upscale · contrast", enhance, onEnhanceToggle)
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-        }
         ToggleRow(Icons.Filled.Layers, "Multi-capture", "Scan several · export as one", multiMode, onMultiToggle)
     }
 }
 
 @Composable
-private fun EngineChip(
-    type: OcrEngineType,
+private fun ModeChip(
+    mode: OcrMode,
     selected: Boolean,
     modifier: Modifier,
     onClick: () -> Unit
@@ -374,7 +366,7 @@ private fun EngineChip(
             )
             Spacer(Modifier.width(6.dp))
             Text(
-                type.displayName,
+                mode.displayName,
                 fontWeight = FontWeight.Bold,
                 fontSize = 13.sp,
                 color = if (selected) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant
@@ -382,7 +374,7 @@ private fun EngineChip(
         }
         Spacer(Modifier.height(2.dp))
         Text(
-            type.tagline,
+            mode.tagline,
             fontFamily = FontFamily.Monospace,
             fontSize = 9.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant

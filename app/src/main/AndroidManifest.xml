@@ -37,9 +37,5 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
-        <!-- Bundle the OCR model with the app so it works on first launch. -->
-        <meta-data
-            android:name="com.google.mlkit.vision.DEPENDENCIES"
-            android:value="ocr" />
     </application>
 </manifest>

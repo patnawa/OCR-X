@@ -1,7 +1,7 @@
 package com.tsm.ocrx
 
 import android.content.Context
-import com.tsm.ocrx.ocr.OcrEngineType
+import com.tsm.ocrx.ocr.OcrMode
 import com.tsm.ocrx.translate.Language
 import com.tsm.ocrx.translate.TranslationEngine
 import com.tsm.ocrx.translate.TranslationMode
@@ -11,8 +11,7 @@ import org.json.JSONObject
 /** Restored session data (text only; image thumbnails aren't persisted). */
 data class RestoredSession(
     val multiMode: Boolean,
-    val enhance: Boolean,
-    val engine: OcrEngineType,
+    val mode: OcrMode,
     val targetLang: Language,
     val translationMode: TranslationMode,
     val translatedText: String,
@@ -32,8 +31,7 @@ class SessionStore(context: Context) {
 
     fun save(
         multiMode: Boolean,
-        enhance: Boolean,
-        engine: OcrEngineType,
+        mode: OcrMode,
         targetLang: Language,
         translationMode: TranslationMode,
         translatedText: String,
@@ -41,8 +39,7 @@ class SessionStore(context: Context) {
     ) {
         val json = JSONObject()
             .put("multiMode", multiMode)
-            .put("enhance", enhance)
-            .put("engine", engine.name)
+            .put("ocrMode", mode.name)
             .put("targetLang", targetLang.code)
             .put("mode", translationMode.name)
             .put("translated", translatedText)
@@ -62,9 +59,8 @@ class SessionStore(context: Context) {
             if (texts.isEmpty()) return null
             RestoredSession(
                 multiMode = json.optBoolean("multiMode", false),
-                enhance = json.optBoolean("enhance", true),
-                engine = runCatching { OcrEngineType.valueOf(json.optString("engine")) }
-                    .getOrDefault(OcrEngineType.PP_OCR_V6),
+                mode = runCatching { OcrMode.valueOf(json.optString("ocrMode")) }
+                    .getOrDefault(OcrMode.QUALITY),
                 targetLang = TranslationEngine.LANGUAGES
                     .firstOrNull { it.code == json.optString("targetLang") }
                     ?: TranslationEngine.LANGUAGES.first(),
