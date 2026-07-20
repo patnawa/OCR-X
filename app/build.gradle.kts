@@ -72,6 +72,11 @@ dependencies {
     // On-device OCR (Latin script) — free, works offline, no API key.
     implementation("com.google.mlkit:text-recognition:16.0.1")
 
+    // On-device translation + language identification (free, offline after
+    // a one-time per-language model download).
+    implementation("com.google.mlkit:translate:17.0.3")
+    implementation("com.google.mlkit:language-id:17.0.6")
+
     // Image loading for previews.
     implementation("io.coil-kt:coil-compose:2.7.0")
 

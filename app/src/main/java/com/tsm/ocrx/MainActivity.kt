@@ -39,6 +39,8 @@ import coil.compose.AsyncImage
 import com.tsm.ocrx.export.ExportFormat
 import com.tsm.ocrx.export.Exporters
 import com.tsm.ocrx.ocr.OcrEngineType
+import com.tsm.ocrx.translate.Language
+import com.tsm.ocrx.translate.TranslationEngine
 import com.tsm.ocrx.ui.theme.ChipShape
 import com.tsm.ocrx.ui.theme.OcrXTheme
 import com.tsm.ocrx.ui.theme.PanelShape
@@ -76,6 +78,7 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
 
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
     var pendingExport by remember { mutableStateOf(ExportFormat.CSV) }
+    var pendingTranslated by remember { mutableStateOf(false) }
 
     val galleryLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
@@ -87,10 +90,11 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
 
     fun exportTo(format: ExportFormat, target: Uri) {
         scope.launch {
+            val result = if (pendingTranslated) state.translatedTable else state.table
             val ok = withContext(Dispatchers.IO) {
                 try {
                     context.contentResolver.openOutputStream(target)?.use { out ->
-                        Exporters.write(format, state.table, out)
+                        Exporters.write(format, result, out)
                     } != null
                 } catch (e: Exception) {
                     false
@@ -104,9 +108,11 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
         ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { uri -> if (uri != null) exportTo(pendingExport, uri) }
 
-    fun startExport(format: ExportFormat) {
+    fun startExport(format: ExportFormat, translated: Boolean) {
         pendingExport = format
-        exportLauncher.launch(format.defaultFileName())
+        pendingTranslated = translated
+        val prefix = if (translated) "ocr-x-${state.targetLang.code}" else "ocr-x-export"
+        exportLauncher.launch("$prefix.${format.extension}")
     }
 
     fun launchCamera() {
@@ -171,7 +177,18 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
                         multiMode = state.multiMode,
                         combinedText = combined.rawText,
                         onCopy = { scope.launch { snackbar.showSnackbar("Text copied") } },
-                        onExport = ::startExport
+                        onExport = { startExport(it, false) }
+                    )
+
+                    TranslationPanel(
+                        targetLang = state.targetLang,
+                        status = state.translateStatus,
+                        translatedText = state.translatedText,
+                        onTargetChange = { vm.setTargetLang(it) },
+                        onTranslate = { vm.translate() },
+                        onTranslatedChange = { vm.onTranslatedTextChanged(it) },
+                        onCopy = { scope.launch { snackbar.showSnackbar("Translation copied") } },
+                        onExport = { startExport(it, true) }
                     )
                 }
             }
@@ -556,27 +573,144 @@ private fun ExportSection(
     IndustrialPanel {
         SectionLabel("Export")
         Spacer(Modifier.height(10.dp))
-        val icons = mapOf(
-            ExportFormat.CSV to Icons.Filled.GridOn,
-            ExportFormat.XLSX to Icons.Filled.TableView,
-            ExportFormat.PDF to Icons.Filled.PictureAsPdf,
-            ExportFormat.JSON to Icons.Filled.DataObject,
-            ExportFormat.TXT to Icons.Filled.Description
-        )
-        val formats = ExportFormat.entries
-        formats.chunked(3).forEach { rowFormats ->
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
-            ) {
-                rowFormats.forEach { fmt ->
-                    ExportButton(fmt.label, icons[fmt]!!, Modifier.weight(1f)) { onExport(fmt) }
-                }
-                repeat(3 - rowFormats.size) { Spacer(Modifier.weight(1f)) }
+        ExportGrid(onExport)
+    }
+    Spacer(Modifier.height(8.dp))
+}
+
+@Composable
+private fun ExportGrid(onExport: (ExportFormat) -> Unit) {
+    val icons = mapOf(
+        ExportFormat.CSV to Icons.Filled.GridOn,
+        ExportFormat.XLSX to Icons.Filled.TableView,
+        ExportFormat.PDF to Icons.Filled.PictureAsPdf,
+        ExportFormat.JSON to Icons.Filled.DataObject,
+        ExportFormat.TXT to Icons.Filled.Description
+    )
+    ExportFormat.entries.chunked(3).forEach { rowFormats ->
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
+        ) {
+            rowFormats.forEach { fmt ->
+                ExportButton(fmt.label, icons[fmt]!!, Modifier.weight(1f)) { onExport(fmt) }
             }
+            repeat(3 - rowFormats.size) { Spacer(Modifier.weight(1f)) }
+        }
+    }
+}
+
+@Composable
+private fun TranslationPanel(
+    targetLang: Language,
+    status: TranslateStatus,
+    translatedText: String,
+    onTargetChange: (Language) -> Unit,
+    onTranslate: () -> Unit,
+    onTranslatedChange: (String) -> Unit,
+    onCopy: () -> Unit,
+    onExport: (ExportFormat) -> Unit
+) {
+    val clipboard = LocalClipboardManager.current
+    Spacer(Modifier.height(16.dp))
+    IndustrialPanel {
+        SectionLabel("Translate", "on-device")
+        Spacer(Modifier.height(10.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            LanguageSelector(targetLang, onTargetChange, Modifier.weight(1f))
+            Button(
+                onClick = onTranslate,
+                shape = ChipShape,
+                enabled = status !is TranslateStatus.Running,
+                modifier = Modifier.height(48.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                )
+            ) {
+                Icon(Icons.Filled.Translate, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("TRANSLATE", fontWeight = FontWeight.Bold, letterSpacing = 1.sp, fontSize = 12.sp)
+            }
+        }
+
+        when (status) {
+            is TranslateStatus.Running -> {
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(10.dp))
+                    Text(status.stage.uppercase(), fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                }
+            }
+            is TranslateStatus.Error -> {
+                Spacer(Modifier.height(12.dp))
+                Text(status.message, fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
+            }
+            TranslateStatus.Done -> {
+                Spacer(Modifier.height(12.dp))
+                DataTextField(translatedText, onTranslatedChange)
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = {
+                        clipboard.setText(AnnotatedString(translatedText))
+                        onCopy()
+                    },
+                    shape = ChipShape,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onBackground),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("COPY TRANSLATION", fontWeight = FontWeight.Bold, letterSpacing = 1.sp, fontSize = 12.sp)
+                }
+                Spacer(Modifier.height(12.dp))
+                Text("EXPORT TRANSLATION", fontFamily = FontFamily.Monospace, fontSize = 10.sp, letterSpacing = 1.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(8.dp))
+                ExportGrid(onExport)
+            }
+            TranslateStatus.Idle -> Unit
         }
     }
     Spacer(Modifier.height(8.dp))
+}
+
+@Composable
+private fun LanguageSelector(
+    selected: Language,
+    onChange: (Language) -> Unit,
+    modifier: Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant, ChipShape)
+                .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline), ChipShape)
+                .clickable { expanded = true }
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("TO", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(8.dp))
+            Text(selected.name, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.weight(1f))
+            Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            TranslationEngine.LANGUAGES.forEach { lang ->
+                DropdownMenuItem(
+                    text = { Text(lang.name) },
+                    onClick = { onChange(lang); expanded = false }
+                )
+            }
+        }
+    }
 }
 
 @Composable

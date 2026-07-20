@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import com.tsm.ocrx.model.OcrResult
 import com.tsm.ocrx.ocr.OcrEngine
 import com.tsm.ocrx.ocr.OcrEngineType
+import com.tsm.ocrx.translate.Language
+import com.tsm.ocrx.translate.TranslationEngine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -16,6 +18,13 @@ sealed interface OcrStatus {
     data object Processing : OcrStatus
     data object Done : OcrStatus
     data class Error(val message: String) : OcrStatus
+}
+
+sealed interface TranslateStatus {
+    data object Idle : TranslateStatus
+    data class Running(val stage: String) : TranslateStatus
+    data object Done : TranslateStatus
+    data class Error(val message: String) : TranslateStatus
 }
 
 /** One scanned image and the (possibly edited) text recognized from it. */
@@ -30,7 +39,10 @@ data class OcrUiState(
     val multiMode: Boolean = false,
     val enhance: Boolean = true,
     val engine: OcrEngineType = OcrEngineType.PP_OCR_V6,
-    val pages: List<Page> = emptyList()
+    val pages: List<Page> = emptyList(),
+    val targetLang: Language = TranslationEngine.LANGUAGES.first(),
+    val translateStatus: TranslateStatus = TranslateStatus.Idle,
+    val translatedText: String = ""
 ) {
     val isEmpty: Boolean get() = pages.isEmpty()
     val isProcessing: Boolean get() = pages.any { it.status is OcrStatus.Processing }
@@ -41,6 +53,11 @@ data class OcrUiState(
 
     /** Combined text parsed into a table for preview and export. */
     val table: OcrResult get() = OcrEngine.parse(combinedText)
+
+    /** Translated text parsed into a table for export. */
+    val translatedTable: OcrResult get() = OcrEngine.parse(translatedText)
+
+    val hasTranslation: Boolean get() = translateStatus == TranslateStatus.Done && translatedText.isNotBlank()
 }
 
 class OcrViewModel(app: Application) : AndroidViewModel(app) {
@@ -62,11 +79,63 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(engine = engine)
     }
 
+    fun setTargetLang(lang: Language) {
+        _state.value = _state.value.copy(
+            targetLang = lang,
+            translateStatus = TranslateStatus.Idle,
+            translatedText = ""
+        )
+    }
+
+    fun onTranslatedTextChanged(newText: String) {
+        _state.value = _state.value.copy(translatedText = newText)
+    }
+
+    /** Translates the combined recognized text into the selected target language. */
+    fun translate() {
+        val source = _state.value.combinedText
+        if (source.isBlank()) return
+        val target = _state.value.targetLang.code
+        _state.value = _state.value.copy(
+            translateStatus = TranslateStatus.Running("Preparing…"),
+            translatedText = ""
+        )
+        viewModelScope.launch {
+            try {
+                val result = TranslationEngine.translate(source, target) { stage ->
+                    _state.value = _state.value.copy(translateStatus = TranslateStatus.Running(stage))
+                }
+                _state.value = _state.value.copy(
+                    translatedText = result,
+                    translateStatus = TranslateStatus.Done
+                )
+            } catch (e: Exception) {
+                android.util.Log.e("OcrX", "Translation failed", e)
+                val msg = e.message ?: "Translation failed"
+                val friendly = if (msg.contains("download", true) || msg.contains("network", true))
+                    "Model download needs internet (one-time)"
+                else msg
+                _state.value = _state.value.copy(translateStatus = TranslateStatus.Error(friendly))
+            }
+        }
+    }
+
+    private fun clearTranslation() {
+        _state.value = _state.value.copy(
+            translateStatus = TranslateStatus.Idle,
+            translatedText = ""
+        )
+    }
+
     /** Adds an image. In multi mode it appends a page; otherwise it replaces. */
     fun onImagePicked(uri: Uri) {
         val page = Page(id = nextId++, imageUri = uri, status = OcrStatus.Processing)
         val pages = if (_state.value.multiMode) _state.value.pages + page else listOf(page)
-        _state.value = _state.value.copy(pages = pages)
+        _state.value = _state.value.copy(
+            pages = pages,
+            translateStatus = TranslateStatus.Idle,
+            translatedText = ""
+        )
         process(page.id, uri)
     }
 
@@ -108,9 +177,11 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(
             pages = _state.value.pages.filterNot { it.id == id }
         )
+        clearTranslation()
     }
 
     fun reset() {
         _state.value = _state.value.copy(pages = emptyList())
+        clearTranslation()
     }
 }

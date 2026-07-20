@@ -9,9 +9,10 @@ Android app that scans images, extracts text with on-device OCR, and exports it 
   - **PP-OCRv6** (default) — PaddleOCR's latest model via the official Android SDK (ONNX Runtime + OpenCV). Highest accuracy; matches/beats large VLMs on OCR benchmarks.
   - **ML Kit** — Google's Latin recognizer. Faster, lighter, with an optional image-enhancement pass.
 - **Multi-capture mode** — flip the toggle to scan several images and export them all into **one file**.
+- **On-device translation** — translate recognized text into 15 languages (incl. Thai) via ML Kit. Free, offline after a one-time per-language model download; export the translated text too.
 - **Edit before export** — every recognized block is editable; fix mistakes before saving.
 - **Table detection** — lines are split into columns on wide gaps, producing a real spreadsheet grid.
-- **Export to CSV / JSON / Excel** — saved wherever you choose via the system file picker. The `.xlsx` writer is dependency-free and opens in Excel, Google Sheets, and LibreOffice.
+- **Export to CSV / Excel / PDF / JSON / TXT** — saved wherever you choose via the system file picker. The `.xlsx` and `.pdf` writers are dependency-free.
 
 ## Tech stack
 
