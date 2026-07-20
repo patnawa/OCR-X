@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Single-colour layer for Android 13+ themed icons; the launcher tints it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,34 h12 v5 h-7 v7 h-5 z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M62,34 h12 v12 h-5 v-7 h-7 z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,62 h5 v7 h7 v5 h-12 z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M69,62 h5 v12 h-12 v-5 h7 z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M42,46 h24 v4 h-24 z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M42,53 h18 v4 h-18 z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M42,60 h22 v4 h-22 z" />
+</vector>
