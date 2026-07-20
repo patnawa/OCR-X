@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -99,9 +100,12 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
         return
     }
 
-    var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
-    var pendingExport by remember { mutableStateOf(ExportFormat.CSV) }
-    var pendingTranslated by remember { mutableStateOf(false) }
+    // rememberSaveable: these must survive process death while the camera /
+    // picker / crop screen is in the foreground and the OS reclaims our
+    // process, otherwise the returning result is silently dropped.
+    var pendingCameraPath by rememberSaveable { mutableStateOf("") }
+    var pendingExportName by rememberSaveable { mutableStateOf(ExportFormat.CSV.name) }
+    var pendingTranslated by rememberSaveable { mutableStateOf(false) }
 
     // Crop step: after capture/pick, let the user drag a box over the text area
     // so OCR only sees what matters. Skippable via the settings toggle.
@@ -134,7 +138,9 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
 
     val cameraLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicture()
-    ) { ok -> if (ok) pendingCameraUri?.let { onImageReady(it) } }
+    ) { ok ->
+        if (ok && pendingCameraPath.isNotBlank()) onImageReady(Uri.parse(pendingCameraPath))
+    }
 
     fun exportTo(format: ExportFormat, target: Uri) {
         scope.launch {
@@ -154,10 +160,16 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
 
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream")
-    ) { uri -> if (uri != null) exportTo(pendingExport, uri) }
+    ) { uri ->
+        if (uri != null) {
+            val format = runCatching { ExportFormat.valueOf(pendingExportName) }
+                .getOrDefault(ExportFormat.CSV)
+            exportTo(format, uri)
+        }
+    }
 
     fun startExport(format: ExportFormat, translated: Boolean) {
-        pendingExport = format
+        pendingExportName = format.name
         pendingTranslated = translated
         val prefix = if (translated) "ocr-x-${state.targetLang.code}" else "ocr-x-export"
         exportLauncher.launch("$prefix.${format.extension}")
@@ -165,7 +177,7 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
 
     fun launchCamera() {
         val uri = createImageUri(context)
-        pendingCameraUri = uri
+        pendingCameraPath = uri.toString()
         cameraLauncher.launch(uri)
     }
 

@@ -40,6 +40,11 @@ class ORTSessionManager(
         val opts = OrtSession.SessionOptions().apply {
             setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
             setIntraOpNumThreads(config.numThreads)
+            // Without these, ORT's arena allocator keeps its high-water mark
+            // resident forever — the process balloons to 500+ MB after large
+            // scans and becomes a prime target for OEM background killers.
+            setCPUArenaAllocator(false)
+            setMemoryPatternOptimization(false)
         }
         try {
             val ortEnv = env ?: throw OCRError.ModelLoadFailed("OCR", Exception("Environment not initialized"))

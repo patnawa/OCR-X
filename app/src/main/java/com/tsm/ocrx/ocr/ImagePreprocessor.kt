@@ -21,7 +21,10 @@ object ImagePreprocessor {
     fun decodeOriented(context: Context, uri: Uri, maxLongEdge: Int = 4000): Bitmap {
         val decoded = decodeSampled(context, uri, maxLongEdge * 2)
         val upright = applyExifOrientation(context, uri, decoded)
-        return capLongEdge(upright, maxLongEdge)
+        if (upright !== decoded) decoded.recycle()
+        val capped = capLongEdge(upright, maxLongEdge)
+        if (capped !== upright) upright.recycle()
+        return capped
     }
 
     private fun decodeSampled(context: Context, uri: Uri, ceiling: Int): Bitmap {
