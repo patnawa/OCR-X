@@ -84,6 +84,12 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
         return
     }
 
+    var showLanguages by remember { mutableStateOf(false) }
+    if (showLanguages) {
+        LanguageManagerScreen(onClose = { showLanguages = false })
+        return
+    }
+
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
     var pendingExport by remember { mutableStateOf(ExportFormat.CSV) }
     var pendingTranslated by remember { mutableStateOf(false) }
@@ -138,7 +144,13 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbar) },
-        topBar = { IndustrialHeader(showClear = !state.isEmpty, onClear = { vm.reset() }) }
+        topBar = {
+            IndustrialHeader(
+                showClear = !state.isEmpty,
+                onClear = { vm.reset() },
+                onManageLanguages = { showLanguages = true }
+            )
+        }
     ) { padding ->
         Column(
             modifier = Modifier
@@ -213,7 +225,7 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
  * ------------------------------------------------------------------------- */
 
 @Composable
-private fun IndustrialHeader(showClear: Boolean, onClear: () -> Unit) {
+private fun IndustrialHeader(showClear: Boolean, onClear: () -> Unit, onManageLanguages: () -> Unit) {
     Column(Modifier.background(MaterialTheme.colorScheme.background)) {
         Row(
             modifier = Modifier
@@ -244,7 +256,9 @@ private fun IndustrialHeader(showClear: Boolean, onClear: () -> Unit) {
                     color = MaterialTheme.colorScheme.primary
                 )
             }
+            OutlinedIconButton(onClick = onManageLanguages, icon = Icons.Filled.Language, desc = "Offline languages")
             if (showClear) {
+                Spacer(Modifier.width(8.dp))
                 OutlinedIconButton(onClick = onClear, icon = Icons.Filled.DeleteSweep, desc = "Clear all")
             }
         }
