@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.tsm.ocrx.model.OcrResult
+import com.tsm.ocrx.model.ScanConfidence
 import com.tsm.ocrx.ocr.OcrEngine
 import com.tsm.ocrx.ocr.OcrMode
 import com.tsm.ocrx.translate.Language
@@ -36,7 +37,9 @@ data class Page(
     val id: Long,
     val imageUri: Uri?,   // null when restored from storage (thumbnail not persisted)
     val status: OcrStatus,
-    val text: String = ""
+    val text: String = "",
+    // Scan-time OCR confidence; null when restored from storage (not persisted).
+    val confidence: ScanConfidence? = null
 )
 
 data class OcrUiState(
@@ -63,6 +66,23 @@ data class OcrUiState(
     val translatedTable: OcrResult get() = OcrEngine.parse(translatedText)
 
     val hasTranslation: Boolean get() = translateStatus == TranslateStatus.Done && translatedText.isNotBlank()
+
+    /** Mean confidence across scored pages, or null if none carry confidence. */
+    val overallConfidence: Float?
+        get() = pages.mapNotNull { it.confidence?.overall }
+            .let { if (it.isEmpty()) null else it.average().toFloat() }
+
+    // All pages' per-line confidence merged; on key collision keep the weakest.
+    private val mergedConfidence: Map<String, Float>
+        get() = buildMap {
+            for (page in pages) page.confidence?.byLine?.forEach { (k, v) ->
+                merge(k, v, ::minOf)
+            }
+        }
+
+    /** Confidence of a rendered table row, or null if unknown (edited/restored). */
+    fun rowConfidence(cells: List<String>): Float? =
+        mergedConfidence[ScanConfidence.keyOf(cells.joinToString(""))]
 }
 
 class OcrViewModel(app: Application) : AndroidViewModel(app) {
@@ -208,10 +228,10 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun process(id: Long, uri: Uri) {
         viewModelScope.launch {
-            val update: (OcrStatus, String) -> Unit = { status, text ->
+            val update: (OcrStatus, String, ScanConfidence?) -> Unit = { status, text, conf ->
                 _state.value = _state.value.copy(
                     pages = _state.value.pages.map {
-                        if (it.id == id) it.copy(status = status, text = text) else it
+                        if (it.id == id) it.copy(status = status, text = text, confidence = conf) else it
                     }
                 )
             }
@@ -219,7 +239,7 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
                 val recognized = OcrEngine.recognize(
                     getApplication(), uri, _state.value.mode
                 )
-                update(OcrStatus.Done, recognized)
+                update(OcrStatus.Done, recognized.text, recognized.confidence)
             } catch (e: Exception) {
                 val chain = generateSequence(e as Throwable) { it.cause }
                     .mapNotNull { it.message?.takeIf { m -> m.isNotBlank() } }
@@ -227,7 +247,7 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
                     .distinct()
                     .joinToString(" ← ")
                 android.util.Log.e("OcrX", "OCR failed", e)
-                update(OcrStatus.Error(chain.ifBlank { "OCR failed" }), "")
+                update(OcrStatus.Error(chain.ifBlank { "OCR failed" }), "", null)
             }
         }
     }

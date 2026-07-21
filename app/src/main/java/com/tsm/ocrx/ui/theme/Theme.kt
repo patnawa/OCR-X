@@ -14,6 +14,7 @@ import androidx.core.view.WindowCompat
 
 // Industrial palette: charcoal steel + safety orange.
 val SafetyOrange = Color(0xFFFF7A18)
+val SafetyAmber = Color(0xFFFFB300)   // caution: low-confidence OCR needing review
 val Charcoal = Color(0xFF0F1114)
 val Panel = Color(0xFF171A1F)
 val PanelHigh = Color(0xFF1E222A)

@@ -49,9 +49,11 @@ import com.tsm.ocrx.ocr.OcrMode
 import com.tsm.ocrx.translate.Language
 import com.tsm.ocrx.translate.TranslationEngine
 import com.tsm.ocrx.translate.TranslationMode
+import com.tsm.ocrx.model.ScanConfidence
 import com.tsm.ocrx.ui.theme.ChipShape
 import com.tsm.ocrx.ui.theme.OcrXTheme
 import com.tsm.ocrx.ui.theme.PanelShape
+import com.tsm.ocrx.ui.theme.SafetyAmber
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -243,6 +245,8 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
                         pageCount = state.pages.size,
                         multiMode = state.multiMode,
                         combinedText = combined.rawText,
+                        overallConfidence = state.overallConfidence,
+                        rowConfidence = { state.rowConfidence(it) },
                         onCopy = { scope.launch { snackbar.showSnackbar("Text copied") } },
                         onExport = { startExport(it, false) }
                     )
@@ -583,7 +587,13 @@ private fun PageCard(
                     }
                     OcrStatus.Done -> {
                         val lines = if (page.text.isBlank()) 0 else page.text.count { it == '\n' } + 1
-                        Text("$lines LINES", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("$lines LINES", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            page.confidence?.let {
+                                Text("  ·  ", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                ConfidenceBadge(it.overall)
+                            }
+                        }
                     }
                     is OcrStatus.Error -> Text(s.message, fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = MaterialTheme.colorScheme.error)
                 }
@@ -614,6 +624,47 @@ private fun DataTextField(value: String, onValueChange: (String) -> Unit) {
     )
 }
 
+/** Colour-coded per-scan confidence: neutral when clean, amber/red when it needs a look. */
+@Composable
+private fun ConfidenceBadge(confidence: Float) {
+    val color = when {
+        confidence >= ScanConfidence.GOOD -> MaterialTheme.colorScheme.onSurfaceVariant
+        confidence >= ScanConfidence.LOW -> SafetyAmber
+        else -> MaterialTheme.colorScheme.error
+    }
+    Text(
+        "${(confidence * 100).toInt()}% CONF",
+        fontFamily = FontFamily.Monospace,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 0.5.sp,
+        color = color
+    )
+}
+
+/** Amber banner shown above the table when a scan's confidence warrants review. */
+@Composable
+private fun ConfidenceWarning(low: Boolean) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(SafetyAmber.copy(alpha = 0.12f), ChipShape)
+            .border(BorderStroke(1.dp, SafetyAmber.copy(alpha = 0.5f)), ChipShape)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(Icons.Filled.Warning, contentDescription = null, tint = SafetyAmber, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(
+            if (low) "LOW CONFIDENCE — verify highlighted rows before export"
+            else "Some cells are uncertain — highlighted rows may need review",
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+    }
+}
+
 /* ---------------------------------------------------------------------------
  * Export
  * ------------------------------------------------------------------------- */
@@ -624,16 +675,23 @@ private fun ExportSection(
     pageCount: Int,
     multiMode: Boolean,
     combinedText: String,
+    overallConfidence: Float?,
+    rowConfidence: (List<String>) -> Float?,
     onCopy: () -> Unit,
     onExport: (ExportFormat) -> Unit
 ) {
     val clipboard = LocalClipboardManager.current
-    val subtitle = if (multiMode) "$pageCount scans · ${rows.size} lines" else "${rows.size} lines"
+    val base = if (multiMode) "$pageCount scans · ${rows.size} lines" else "${rows.size} lines"
+    val subtitle = overallConfidence?.let { "$base · ${(it * 100).toInt()}% conf" } ?: base
 
     IndustrialPanel {
         SectionLabel("Table", subtitle)
+        if (overallConfidence != null && overallConfidence < ScanConfidence.GOOD) {
+            Spacer(Modifier.height(8.dp))
+            ConfidenceWarning(low = overallConfidence < ScanConfidence.LOW)
+        }
         Spacer(Modifier.height(10.dp))
-        TablePreview(rows)
+        TablePreview(rows, rowConfidence)
         Spacer(Modifier.height(10.dp))
         OutlinedButton(
             onClick = {
@@ -853,7 +911,10 @@ private fun ExportButton(label: String, icon: ImageVector, modifier: Modifier, o
 }
 
 @Composable
-private fun TablePreview(rows: List<List<String>>) {
+private fun TablePreview(
+    rows: List<List<String>>,
+    rowConfidence: (List<String>) -> Float? = { null }
+) {
     val columnCount = rows.maxOfOrNull { it.size } ?: 0
     Column(
         Modifier
@@ -863,7 +924,13 @@ private fun TablePreview(rows: List<List<String>>) {
     ) {
         Column(Modifier.horizontalScroll(rememberScrollState()).padding(4.dp)) {
             rows.take(50).forEachIndexed { rowIndex, row ->
-                Row {
+                // Tint rows whose weakest cell fell below the review threshold.
+                val low = rowConfidence(row)?.let { it < ScanConfidence.LOW } == true
+                Row(
+                    Modifier.background(
+                        if (low) SafetyAmber.copy(alpha = 0.16f) else Color.Transparent
+                    )
+                ) {
                     for (c in 0 until columnCount) {
                         Text(
                             text = row.getOrElse(c) { "" },

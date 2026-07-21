@@ -12,8 +12,8 @@ android {
         applicationId = "com.tsm.ocrx"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
         vectorDrawables { useSupportLibrary = true }
         // PP-OCRv6 ships native libs (ONNX Runtime + OpenCV). Cover real phones
         // (arm64 + 32-bit arm) and the standard x86_64 emulator so the OpenCV /
@@ -86,4 +86,7 @@ dependencies {
     implementation(project(":ppocr-sdk"))
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    // JVM unit tests for the pure OCR pipeline (Layout column detection, parsing).
+    testImplementation("junit:junit:4.13.2")
 }

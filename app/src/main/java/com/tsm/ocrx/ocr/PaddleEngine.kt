@@ -5,6 +5,8 @@ import android.graphics.Bitmap
 import android.os.Build
 import com.paddle.ocr.PaddleOCR
 import com.paddle.ocr.PaddleOCRConfig
+import com.tsm.ocrx.model.ScanConfidence
+import com.tsm.ocrx.model.ScanResult
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -44,7 +46,7 @@ object PaddleEngine {
         }
     }
 
-    suspend fun recognize(context: Context, bitmap: Bitmap): String {
+    suspend fun recognize(context: Context, bitmap: Bitmap): ScanResult {
         val result = engine(context).recognize(bitmap)
         val items = result.results.map { r ->
             val xs = r.box.points.map { it.x }
@@ -52,12 +54,21 @@ object PaddleEngine {
             val top = ys.min()
             val height = (ys.max() - top).toInt().coerceAtLeast(1)
             PositionedText(
-                top = top.toInt(),
                 left = xs.min().toInt(),
+                top = top.toInt(),
+                right = xs.max().toInt(),
                 height = height,
-                text = r.text
+                text = r.text,
+                confidence = r.confidence
             )
         }
-        return Layout.buildReadingOrder(items)
+        val layout = Layout.buildReadingOrder(items)
+        val overall = if (items.isEmpty()) 0f
+        else items.map { it.confidence }.average().toFloat()
+        val byLine = layout.text.lines().mapIndexedNotNull { i, line ->
+            val key = ScanConfidence.keyOf(line)
+            if (key.isEmpty()) null else key to layout.lineConfidence[i]
+        }.toMap()
+        return ScanResult(layout.text, ScanConfidence(overall, byLine))
     }
 }
