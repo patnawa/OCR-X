@@ -1,6 +1,7 @@
 package com.tsm.ocrx
 
 import android.content.Context
+import com.tsm.ocrx.ocr.OcrLanguage
 import com.tsm.ocrx.ocr.OcrMode
 import com.tsm.ocrx.translate.Language
 import com.tsm.ocrx.translate.TranslationEngine
@@ -12,6 +13,7 @@ import org.json.JSONObject
 data class RestoredSession(
     val multiMode: Boolean,
     val mode: OcrMode,
+    val language: OcrLanguage,
     val cropEnabled: Boolean,
     val targetLang: Language,
     val translationMode: TranslationMode,
@@ -33,6 +35,7 @@ class SessionStore(context: Context) {
     fun save(
         multiMode: Boolean,
         mode: OcrMode,
+        language: OcrLanguage,
         cropEnabled: Boolean,
         targetLang: Language,
         translationMode: TranslationMode,
@@ -42,6 +45,7 @@ class SessionStore(context: Context) {
         val json = JSONObject()
             .put("multiMode", multiMode)
             .put("ocrMode", mode.name)
+            .put("ocrLang", language.name)
             .put("crop", cropEnabled)
             .put("targetLang", targetLang.code)
             .put("mode", translationMode.name)
@@ -64,6 +68,8 @@ class SessionStore(context: Context) {
                 multiMode = json.optBoolean("multiMode", false),
                 mode = runCatching { OcrMode.valueOf(json.optString("ocrMode")) }
                     .getOrDefault(OcrMode.QUALITY),
+                language = runCatching { OcrLanguage.valueOf(json.optString("ocrLang")) }
+                    .getOrDefault(OcrLanguage.LATIN),
                 cropEnabled = json.optBoolean("crop", true),
                 targetLang = TranslationEngine.LANGUAGES
                     .firstOrNull { it.code == json.optString("targetLang") }

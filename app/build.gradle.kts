@@ -12,8 +12,8 @@ android {
         applicationId = "com.tsm.ocrx"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
         vectorDrawables { useSupportLibrary = true }
         // PP-OCRv6 ships native libs (ONNX Runtime + OpenCV). Cover real phones
         // (arm64 + 32-bit arm) and the standard x86_64 emulator so the OpenCV /

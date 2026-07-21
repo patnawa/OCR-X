@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.tsm.ocrx.model.OcrResult
 import com.tsm.ocrx.model.ScanConfidence
 import com.tsm.ocrx.ocr.OcrEngine
+import com.tsm.ocrx.ocr.OcrLanguage
 import com.tsm.ocrx.ocr.OcrMode
 import com.tsm.ocrx.translate.Language
 import com.tsm.ocrx.translate.TranslationEngine
@@ -45,6 +46,7 @@ data class Page(
 data class OcrUiState(
     val multiMode: Boolean = false,
     val mode: OcrMode = OcrMode.QUALITY,
+    val language: OcrLanguage = OcrLanguage.LATIN,
     val cropEnabled: Boolean = true,
     val pages: List<Page> = emptyList(),
     val targetLang: Language = TranslationEngine.LANGUAGES.first(),
@@ -104,6 +106,7 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = OcrUiState(
                 multiMode = r.multiMode,
                 mode = r.mode,
+                language = r.language,
                 cropEnabled = r.cropEnabled,
                 pages = pages,
                 targetLang = r.targetLang,
@@ -123,6 +126,7 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
                     store.save(
                         multiMode = s.multiMode,
                         mode = s.mode,
+                        language = s.language,
                         cropEnabled = s.cropEnabled,
                         targetLang = s.targetLang,
                         translationMode = s.translationMode,
@@ -152,6 +156,10 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setMode(mode: OcrMode) {
         _state.value = _state.value.copy(mode = mode)
+    }
+
+    fun setLanguage(language: OcrLanguage) {
+        _state.value = _state.value.copy(language = language)
     }
 
     fun setCropEnabled(enabled: Boolean) {
@@ -199,8 +207,11 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 android.util.Log.e("OcrX", "Translation failed", e)
                 val msg = e.message ?: "Translation failed"
-                val friendly = if (msg.contains("download", true) || msg.contains("network", true))
-                    "Model download needs internet (one-time)"
+                val offline = e is java.net.UnknownHostException ||
+                    msg.contains("resolve host", true) || msg.contains("Unable to resolve", true) ||
+                    msg.contains("download", true) || msg.contains("network", true)
+                val friendly = if (offline)
+                    "No internet — connect once to download the offline language model (scanning & export work offline)"
                 else msg
                 _state.value = _state.value.copy(translateStatus = TranslateStatus.Error(friendly))
             }
@@ -237,7 +248,7 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
             }
             try {
                 val recognized = OcrEngine.recognize(
-                    getApplication(), uri, _state.value.mode
+                    getApplication(), uri, _state.value.mode, _state.value.language
                 )
                 update(OcrStatus.Done, recognized.text, recognized.confidence)
             } catch (e: Exception) {

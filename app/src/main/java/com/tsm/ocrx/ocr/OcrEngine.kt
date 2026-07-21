@@ -32,11 +32,12 @@ object OcrEngine {
     suspend fun recognize(
         context: Context,
         imageUri: Uri,
-        mode: OcrMode = OcrMode.QUALITY
+        mode: OcrMode = OcrMode.QUALITY,
+        language: OcrLanguage = OcrLanguage.LATIN
     ): ScanResult {
         val bitmap = ImagePreprocessor.decodeOriented(context, imageUri, mode.maxLongEdge)
         try {
-            return PaddleEngine.recognize(context, bitmap)
+            return PaddleEngine.recognize(context, bitmap, language)
         } finally {
             bitmap.recycle()   // free ~15-30 MB per scan immediately
         }

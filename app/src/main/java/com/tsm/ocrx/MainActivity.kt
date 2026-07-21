@@ -50,6 +50,7 @@ import com.tsm.ocrx.translate.Language
 import com.tsm.ocrx.translate.TranslationEngine
 import com.tsm.ocrx.translate.TranslationMode
 import com.tsm.ocrx.model.ScanConfidence
+import com.tsm.ocrx.ocr.OcrLanguage
 import com.tsm.ocrx.ui.theme.ChipShape
 import com.tsm.ocrx.ui.theme.OcrXTheme
 import com.tsm.ocrx.ui.theme.PanelShape
@@ -212,6 +213,8 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
             SettingsPanel(
                 mode = state.mode,
                 onModeChange = { vm.setMode(it) },
+                language = state.language,
+                onLanguageChange = { vm.setLanguage(it) },
                 cropEnabled = state.cropEnabled,
                 onCropToggle = { vm.setCropEnabled(it) },
                 multiMode = state.multiMode,
@@ -388,6 +391,8 @@ private fun SectionLabel(text: String, trailing: String? = null) {
 private fun SettingsPanel(
     mode: OcrMode,
     onModeChange: (OcrMode) -> Unit,
+    language: OcrLanguage,
+    onLanguageChange: (OcrLanguage) -> Unit,
     cropEnabled: Boolean,
     onCropToggle: (Boolean) -> Unit,
     multiMode: Boolean,
@@ -403,11 +408,54 @@ private fun SettingsPanel(
                 }
             }
         }
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(12.dp))
+        OcrLanguageRow(language, onLanguageChange)
+        Spacer(Modifier.height(4.dp))
         HorizontalDivider(color = MaterialTheme.colorScheme.outline)
         ToggleRow(Icons.Filled.Crop, "Crop before scan", "Select just the text area", cropEnabled, onCropToggle)
         HorizontalDivider(color = MaterialTheme.colorScheme.outline)
         ToggleRow(Icons.Filled.Layers, "Multi-capture", "Scan several · export as one", multiMode, onMultiToggle)
+    }
+}
+
+@Composable
+private fun OcrLanguageRow(
+    language: OcrLanguage,
+    onLanguageChange: (OcrLanguage) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(Icons.Filled.Translate, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Recognition language", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
+            Text("Script the scanner reads", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Box {
+            Row(
+                modifier = Modifier
+                    .height(40.dp)
+                    .background(MaterialTheme.colorScheme.surfaceVariant, ChipShape)
+                    .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline), ChipShape)
+                    .clickable { expanded = true }
+                    .padding(start = 12.dp, end = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(language.displayName, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = MaterialTheme.colorScheme.onBackground)
+                Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                OcrLanguage.entries.forEach { lang ->
+                    DropdownMenuItem(
+                        text = { Text(lang.displayName) },
+                        onClick = { onLanguageChange(lang); expanded = false }
+                    )
+                }
+            }
+        }
     }
 }
 
