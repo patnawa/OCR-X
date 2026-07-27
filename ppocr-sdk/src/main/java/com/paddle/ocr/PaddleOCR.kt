@@ -51,6 +51,15 @@ class PaddleOCR private constructor(
             }
         }
 
+        /**
+         * Creates an engine with explicit model paths. Each path is an APK asset
+         * path, or an absolute filesystem path for a model downloaded at runtime.
+         *
+         * Passing [recModelAssetPath2] / [recConfigAssetPath2] adds a second
+         * recognition model that shares the single detection pass: every detected
+         * box is read by both scripts and the higher-scoring reading wins. This is
+         * what makes mixed-script pages (e.g. Thai and Latin on one receipt) work.
+         */
         suspend fun create(
             context: Context,
             config: PaddleOCRConfig,
@@ -58,6 +67,8 @@ class PaddleOCR private constructor(
             detModelAssetPath: String,
             recModelAssetPath: String,
             recConfigAssetPath: String,
+            recModelAssetPath2: String? = null,
+            recConfigAssetPath2: String? = null,
         ): PaddleOCR {
             val appContext = context.applicationContext
             return withContext(Dispatchers.IO) {
@@ -66,6 +77,8 @@ class PaddleOCR private constructor(
                     detModelAsset = detModelAssetPath,
                     recModelAsset = recModelAssetPath,
                     recConfigAsset = recConfigAssetPath,
+                    recModelAsset2 = recModelAssetPath2,
+                    recConfigAsset2 = recConfigAssetPath2,
                 )
                 PaddleOCR(engine)
             }

@@ -20,6 +20,7 @@ import ai.onnxruntime.OrtSession
 import android.content.Context
 import com.paddle.ocr.EngineConfig
 import com.paddle.ocr.model.OCRError
+import java.io.File
 import java.nio.FloatBuffer
 
 class ORTSessionManager(
@@ -29,27 +30,21 @@ class ORTSessionManager(
     private var env: OrtEnvironment? = null
     private var detSession: OrtSession? = null
     private var recSession: OrtSession? = null
+    private var recSession2: OrtSession? = null
     private var detInputName: String = "x"
     private var recInputName: String = "x"
+    private var recInputName2: String = "x"
     var coldLoadTimeMs: Long = 0
         private set
 
     fun loadModels(detAssetPath: String, recAssetPath: String) {
         val loadStart = System.currentTimeMillis()
         env = OrtEnvironment.getEnvironment()
-        val opts = OrtSession.SessionOptions().apply {
-            setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-            setIntraOpNumThreads(config.numThreads)
-            // Without these, ORT's arena allocator keeps its high-water mark
-            // resident forever — the process balloons to 500+ MB after large
-            // scans and becomes a prime target for OEM background killers.
-            setCPUArenaAllocator(false)
-            setMemoryPatternOptimization(false)
-        }
+        val opts = newSessionOptions()
         try {
             val ortEnv = env ?: throw OCRError.ModelLoadFailed("OCR", Exception("Environment not initialized"))
-            val detBytes = readModelAsset(detAssetPath)
-            val recBytes = readModelAsset(recAssetPath)
+            val detBytes = readModel(detAssetPath)
+            val recBytes = readModel(recAssetPath)
             try {
                 detSession = ortEnv.createSession(detBytes, opts)
             } catch (t: Throwable) {
@@ -79,6 +74,58 @@ class ORTSessionManager(
         }
     }
 
+    /**
+     * Loads an additional recognition model that shares this manager's detection
+     * session. Used to recognize the same crops with a second script's model so the
+     * caller can keep whichever reading scored higher.
+     */
+    fun loadSecondaryRecognition(recPath: String) {
+        val ortEnv = env
+            ?: throw OCRError.ModelLoadFailed("recognition", Exception("Environment not initialized"))
+        val opts = newSessionOptions()
+        try {
+            val bytes = readModel(recPath)
+            recSession2 = try {
+                ortEnv.createSession(bytes, opts)
+            } catch (t: Throwable) {
+                throw OCRError.ModelLoadFailed("recognition (secondary)", t)
+            }
+            recInputName2 = try {
+                recSession2!!.inputNames.iterator().next()
+            } catch (t: Throwable) {
+                throw OCRError.ModelLoadFailed("recognition (secondary)", t)
+            }
+        } finally {
+            opts.close()
+        }
+    }
+
+    private fun newSessionOptions(): OrtSession.SessionOptions =
+        OrtSession.SessionOptions().apply {
+            setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+            setIntraOpNumThreads(config.numThreads)
+            // Without these, ORT's arena allocator keeps its high-water mark
+            // resident forever — the process balloons to 500+ MB after large
+            // scans and becomes a prime target for OEM background killers.
+            setCPUArenaAllocator(false)
+            setMemoryPatternOptimization(false)
+            // Execution providers are best-effort: a runtime build without the
+            // provider throws, and a session with no EP registered still runs on
+            // plain CPU. Never let an accelerator turn into a hard scan failure.
+            if (config.useNnapi) {
+                try {
+                    addNnapi()
+                } catch (_: Throwable) {
+                }
+            }
+            if (config.useXnnpack) {
+                try {
+                    addXnnpack(mapOf("intra_op_num_threads" to config.numThreads.toString()))
+                } catch (_: Throwable) {
+                }
+            }
+        }
+
     fun runDetection(input: FloatArray, shape: LongArray): Pair<FloatArray, LongArray> {
         val session = detSession
             ?: throw OCRError.ModelLoadFailed("detection", Exception("Session not initialized"))
@@ -95,6 +142,17 @@ class ORTSessionManager(
         return runSession(ortEnv, session, recInputName, input, shape, "recognition")
     }
 
+    /** True when a secondary recognition model is loaded. */
+    val hasSecondaryRecognition: Boolean get() = recSession2 != null
+
+    fun runRecognitionSecondary(input: FloatArray, shape: LongArray): Pair<FloatArray, LongArray> {
+        val session = recSession2
+            ?: throw OCRError.ModelLoadFailed("recognition", Exception("Secondary session not initialized"))
+        val ortEnv = env
+            ?: throw OCRError.ModelLoadFailed("recognition", Exception("Environment not initialized"))
+        return runSession(ortEnv, session, recInputName2, input, shape, "recognition (secondary)")
+    }
+
     fun release() {
         try {
             detSession?.close()
@@ -104,16 +162,34 @@ class ORTSessionManager(
                 recSession?.close()
             } finally {
                 recSession = null
-                env = null
+                try {
+                    recSession2?.close()
+                } finally {
+                    recSession2 = null
+                    env = null
+                }
             }
         }
     }
 
-    private fun readModelAsset(assetPath: String): ByteArray {
+    /**
+     * Reads a model from either the APK assets or the filesystem. An absolute path
+     * is treated as a file so downloaded models can be loaded without being copied
+     * into assets; anything else is an asset path.
+     */
+    private fun readModel(path: String): ByteArray {
         return try {
-            context.assets.open(assetPath).use { it.readBytes() }
+            if (path.startsWith("/")) {
+                val file = File(path)
+                if (!file.isFile) throw OCRError.ModelNotFound(path, Exception("No such file"))
+                file.readBytes()
+            } else {
+                context.assets.open(path).use { it.readBytes() }
+            }
+        } catch (t: OCRError) {
+            throw t
         } catch (t: Throwable) {
-            throw OCRError.ModelNotFound(assetPath, t)
+            throw OCRError.ModelNotFound(path, t)
         }
     }
 

@@ -62,6 +62,76 @@ class LayoutTest {
     }
 
     @Test
+    fun `a wide header line does not collapse the columns beneath it`() {
+        // "Invoice No: INV-2024-0091" runs from x=0 to x=430, straight across the
+        // gutter between the item and qty columns. Letting it vote on where the
+        // columns are would merge them; only the multi-fragment rows should decide.
+        val items = listOf(
+            box(0, 0, 430, "Invoice No: INV-2024-0091"),
+            box(0, 40, 90, "Bolt"), box(440, 40, 470, "2"), box(700, 40, 780, "24.00"),
+            box(0, 80, 90, "Nut"), box(440, 80, 470, "4"), box(700, 80, 780, "8.00")
+        )
+
+        val rows = OcrEngine.parse(Layout.buildReadingOrder(items).text).rows
+
+        assertEquals(listOf("Bolt", "2", "24.00"), rows[1])
+        assertEquals(listOf("Nut", "4", "8.00"), rows[2])
+    }
+
+    @Test
+    fun `drawn ruling lines define the columns`() {
+        // Two cells whose whitespace gap is too narrow to be read as a gutter, but a
+        // printed rule sits between them at x=100.
+        val items = listOf(
+            box(10, 0, 90, "PART"), box(108, 0, 190, "QTY"),
+            box(10, 30, 90, "Bolt"), box(108, 30, 190, "12")
+        )
+
+        val text = Layout.buildReadingOrder(items, columnSeparators = listOf(0, 100, 200)).text
+
+        assertEquals(listOf("PART\tQTY", "Bolt\t12"), text.lines())
+    }
+
+    @Test
+    fun `a single stray rule does not split the page`() {
+        // One separator cannot partition anything, so the gutter heuristic must run.
+        val items = listOf(box(0, 0, 100, "ACME MOTOR"))
+
+        val text = Layout.buildReadingOrder(items, columnSeparators = listOf(50)).text
+
+        assertEquals("ACME MOTOR", text)
+    }
+
+    @Test
+    fun `a row mixing font sizes stays one row`() {
+        // A 40px-tall heading and a 16px label share a baseline but not a top edge:
+        // grouping by top would split them, grouping by vertical centre keeps them.
+        val items = listOf(
+            box(0, 0, 80, "TOTAL", height = 40),
+            box(300, 12, 380, "42.00", height = 16)
+        )
+
+        val result = Layout.buildReadingOrder(items)
+
+        assertEquals(1, result.text.lines().size)
+        assertEquals("TOTAL\t42.00", result.text)
+    }
+
+    @Test
+    fun `reports the pixel bounds of every emitted line`() {
+        val items = listOf(
+            box(10, 0, 80, "Item"), box(300, 0, 380, "Price"),
+            box(12, 30, 70, "Bolt"), box(300, 30, 350, "5.00")
+        )
+
+        val result = Layout.buildReadingOrder(items)
+
+        assertEquals(2, result.lineBoxes.size)
+        assertEquals(TextBox(left = 10, top = 0, right = 380, bottom = 20), result.lineBoxes[0])
+        assertEquals(TextBox(left = 12, top = 30, right = 350, bottom = 50), result.lineBoxes[1])
+    }
+
+    @Test
     fun `line confidence is the weakest fragment in the row`() {
         val items = listOf(
             box(0, 0, 80, "Good", confidence = 0.99f), box(300, 0, 380, "Bad", confidence = 0.42f),

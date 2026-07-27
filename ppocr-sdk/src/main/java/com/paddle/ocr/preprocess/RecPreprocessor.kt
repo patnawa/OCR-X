@@ -30,6 +30,13 @@ object RecPreprocessor {
     private const val FIXED_HEIGHT = 48
     private const val MAX_IMG_W = 3200
 
+    /**
+     * Width a crop of this shape will occupy in the batch tensor. Exposed so batching
+     * decisions are made against the same figure the tensor is actually built from.
+     */
+    fun inputWidthFor(aspectRatio: Double): Int =
+        ceil(FIXED_HEIGHT * aspectRatio).toInt().coerceIn(1, MAX_IMG_W)
+
     fun preprocessBatch(crops: List<Mat>): RecPreprocessResult {
         // Convert BGR to RGB and resize to fixed height while preserving aspect ratio
         val resizedMats = mutableListOf<Mat>()
@@ -40,7 +47,7 @@ object RecPreprocessor {
             val h = rgb.rows()
             val w = rgb.cols()
             val aspectRatio = if (h > 0) w.toDouble() / h else 1.0
-            val newW = ceil(FIXED_HEIGHT * aspectRatio).toInt().coerceAtMost(MAX_IMG_W)
+            val newW = inputWidthFor(aspectRatio)
             val dst = Mat()
             Imgproc.resize(rgb, dst, Size(newW.toDouble(), FIXED_HEIGHT.toDouble()), 0.0, 0.0, Imgproc.INTER_LINEAR)
             rgb.release()

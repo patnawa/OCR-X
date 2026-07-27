@@ -14,27 +14,45 @@ data class PositionedText(
     val confidence: Float = 1f
 ) {
     val centerX: Int get() = (left + right) / 2
+    val centerY: Int get() = top + height / 2
+    val bottom: Int get() = top + height
+}
+
+/** Pixel bounds of a recognized line in the scanned image's coordinate space. */
+data class TextBox(
+    val left: Int,
+    val top: Int,
+    val right: Int,
+    val bottom: Int
+) {
+    val width: Int get() = right - left
+    val height: Int get() = bottom - top
 }
 
 /**
- * Reading-order text plus a per-line confidence aligned 1:1 with [text]'s lines
- * (each line's weakest fragment, so one doubtful cell flags the whole row).
+ * Reading-order text plus per-line signals aligned 1:1 with [text]'s lines:
+ * [lineConfidence] is each line's weakest fragment (so one doubtful cell flags the
+ * row) and [lineBoxes] is where the line sits in the image, which lets the UI show
+ * the original pixels behind any row.
  */
 data class LayoutResult(
     val text: String,
-    val lineConfidence: List<Float>
+    val lineConfidence: List<Float>,
+    val lineBoxes: List<TextBox> = emptyList()
 )
 
 /**
  * Rebuilds table structure from positioned OCR fragments.
  *
- * 1. Fragments are grouped into visual rows (tops within a tolerance derived from
- *    the median text height).
- * 2. Column boundaries are found ONCE for the whole page by locating vertical
- *    "gutters" — x ranges that no row draws into. This is alignment-agnostic (works
- *    for left-, right- and centre-aligned columns) and only splits where a real
- *    page-spanning gap exists, so free-form text (a nameplate, a paragraph) stays a
- *    single column while genuine tables get consistent columns across every row.
+ * 1. Fragments are grouped into visual rows by clustering on their vertical centres,
+ *    which keeps a row together when it mixes font sizes (a tall heading next to
+ *    small print shares a centre line but not a top edge).
+ * 2. Column boundaries are found ONCE for the whole page. When the page draws its own
+ *    ruling lines those are used directly; otherwise boundaries come from vertical
+ *    "gutters" — x ranges that no row draws into. Both are alignment-agnostic (they
+ *    work for left-, right- and centre-aligned columns) and only split where a real
+ *    page-spanning separation exists, so free-form text (a nameplate, a paragraph)
+ *    stays a single column while genuine tables get consistent columns across rows.
  * 3. Rows are emitted TAB-delimited so [OcrEngine.parse] can recover the exact grid,
  *    including interior empty cells (a row that skips a column keeps its place).
  *
@@ -46,15 +64,24 @@ object Layout {
 
     private const val COLUMN_DELIMITER = "\t"
 
-    fun buildReadingOrder(items: List<PositionedText>): LayoutResult {
+    /**
+     * @param columnSeparators x positions of drawn vertical rules, when the page is a
+     *        ruled table. Given these, column bands come straight from the printed
+     *        grid instead of being inferred from whitespace.
+     */
+    fun buildReadingOrder(
+        items: List<PositionedText>,
+        columnSeparators: List<Int> = emptyList()
+    ): LayoutResult {
         val clean = items.filter { it.text.isNotBlank() }
-        if (clean.isEmpty()) return LayoutResult("", emptyList())
+        if (clean.isEmpty()) return LayoutResult("", emptyList(), emptyList())
 
         val medianHeight = clean.map { it.height }.sorted()
             .let { it[it.size / 2] }.coerceAtLeast(1)
         val rows = groupIntoRows(clean, rowTolerance = max(10, (medianHeight * 0.6f).toInt()))
 
-        val bands = detectColumnBands(clean, medianHeight)
+        val bands = bandsFromSeparators(clean, columnSeparators)
+            ?: detectColumnBands(columnEvidence(rows, clean), medianHeight)
         // One band → not a table. Emit plain reading-order lines, columns untouched.
         val singleColumn = bands.size <= 1
         val lineTexts = rows.map { row ->
@@ -63,27 +90,90 @@ object Layout {
         }
         // A row's confidence is its weakest fragment: one bad cell flags the row.
         val lineConfidence = rows.map { row -> row.minOf { it.confidence } }
-        return LayoutResult(lineTexts.joinToString("\n"), lineConfidence)
+        val lineBoxes = rows.map { row ->
+            TextBox(
+                left = row.minOf { it.left },
+                top = row.minOf { it.top },
+                right = row.maxOf { it.right },
+                bottom = row.maxOf { it.bottom }
+            )
+        }
+        return LayoutResult(lineTexts.joinToString("\n"), lineConfidence, lineBoxes)
     }
 
-    /** Groups fragments whose tops fall within [rowTolerance] of the row's first item. */
+    /**
+     * Groups fragments into visual rows by vertical centre. Sorting by centre and
+     * comparing against the running mean keeps a tall fragment and a short one on the
+     * same baseline together, which comparing top edges does not.
+     */
     private fun groupIntoRows(
         items: List<PositionedText>,
         rowTolerance: Int
     ): List<List<PositionedText>> {
-        val sorted = items.sortedBy { it.top }
+        val sorted = items.sortedBy { it.centerY }
         val rows = mutableListOf<MutableList<PositionedText>>()
+        var runningCentre = 0
         for (item in sorted) {
             val row = rows.lastOrNull()
-            if (row != null && abs(item.top - row.first().top) <= rowTolerance) row.add(item)
-            else rows.add(mutableListOf(item))
+            if (row != null && abs(item.centerY - runningCentre) <= rowTolerance) {
+                row.add(item)
+                runningCentre = row.sumOf { it.centerY } / row.size
+            } else {
+                rows.add(mutableListOf(item))
+                runningCentre = item.centerY
+            }
         }
         return rows
     }
 
     /**
+     * Turns drawn vertical rules into column bands: the content between consecutive
+     * rules is one column. Returns null when the rules do not actually partition the
+     * content (fewer than two resulting columns hold anything), which keeps a stray
+     * detected line from collapsing the table.
+     */
+    private fun bandsFromSeparators(
+        items: List<PositionedText>,
+        separators: List<Int>
+    ): List<IntRange>? {
+        if (separators.size < 2) return null
+        val minX = items.minOf { it.left }
+        val maxX = items.maxOf { it.right }
+        val edges = (listOf(minX) + separators.sorted() + listOf(maxX)).distinct().sorted()
+
+        val bands = mutableListOf<IntRange>()
+        for (i in 0 until edges.size - 1) {
+            val range = edges[i]..edges[i + 1]
+            // Skip a band nothing sits in — usually the sliver outside the outer rules.
+            if (items.any { it.centerX in range }) bands.add(range)
+        }
+        return if (bands.size >= 2) bands else null
+    }
+
+    /**
+     * The fragments that should decide where the columns are: those in rows holding
+     * more than one fragment.
+     *
+     * A gutter is destroyed by any single line that spans it, and documents are full
+     * of such lines — a title, an address, "Invoice No: INV-2024-0091" running across
+     * the width above the table. Letting those vote collapses the table underneath
+     * them into one column. A row with several fragments, by contrast, is direct
+     * evidence of a row *of a table*, and only those rows know where its columns are.
+     *
+     * Falls back to every fragment when there is no such evidence, which is the
+     * free-form case that should stay a single column anyway.
+     */
+    private fun columnEvidence(
+        rows: List<List<PositionedText>>,
+        all: List<PositionedText>
+    ): List<PositionedText> {
+        val multiFragmentRows = rows.filter { it.size > 1 }
+        return if (multiFragmentRows.size >= 2) multiFragmentRows.flatten() else all
+    }
+
+    /**
      * Finds column bands: the runs of x that contain content, separated by gutters.
-     * A gutter is a run of empty x at least [minGutterHeightFactor]× the median text
+     * A gutter is a run of empty x at least [MIN_GUTTER_HEIGHT_FACTOR]× the median text
      * height wide — wide enough that inter-word spacing inside a cell never splits it.
      */
     private fun detectColumnBands(

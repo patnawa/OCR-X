@@ -44,8 +44,31 @@ data class ScanConfidence(
     }
 }
 
+/**
+ * Where each recognized line sits in the scanned image, so the UI can show the
+ * original pixels behind a row the user doubts.
+ *
+ * Coordinates are in the space of the *straightened, scan-resolution* image — the
+ * bitmap actually handed to the recogniser, not the source photo — which is why
+ * [imagePath] points at a cached copy of exactly that bitmap.
+ *
+ * @param byLine    normalized line key (see [ScanConfidence.keyOf]) → its bounds.
+ * @param imagePath cached JPEG of the scanned bitmap, or null if it could not be written.
+ */
+data class ScanGeometry(
+    val byLine: Map<String, com.tsm.ocrx.ocr.TextBox>,
+    val imagePath: String?,
+    val imageWidth: Int,
+    val imageHeight: Int
+)
+
 /** Text recognized from one image together with its confidence signal. */
 data class ScanResult(
     val text: String,
-    val confidence: ScanConfidence
+    val confidence: ScanConfidence,
+    val geometry: ScanGeometry? = null,
+    /** Human-readable summary of each cell repaired by the post-OCR corrector. */
+    val corrections: List<String> = emptyList(),
+    /** Numeric columns whose declared total disagreed with the rows above it. */
+    val failedSumColumns: Int = 0
 )

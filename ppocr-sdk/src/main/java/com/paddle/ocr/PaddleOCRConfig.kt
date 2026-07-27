@@ -14,6 +14,18 @@
 
 package com.paddle.ocr
 
+/**
+ * @param recMaxBatchPaddedWidth ceiling on `batch size × widest crop` for one
+ *                               recognition batch, bounding the tensor a page of
+ *                               unusually wide lines can allocate.
+ * @param recSecondaryMaxConf    only lines the primary model read below this
+ *                               confidence are re-read by the secondary script's
+ *                               model. A line the primary is already sure of cannot
+ *                               realistically be taken from it (see
+ *                               `OCREngine.SECONDARY_MARGIN`), so re-reading it is
+ *                               inference spent for nothing. Set to 1.0 to re-read
+ *                               every line.
+ */
 data class PaddleOCRConfig(
     val detImgMode: String = "BGR",
     val detLimitSideLen: Int = 64,
@@ -28,4 +40,6 @@ data class PaddleOCRConfig(
     val detBoxType: String = "quad",
     val recScoreThresh: Float = 0.0f,
     val recBatchSize: Int = 1,
+    val recMaxBatchPaddedWidth: Int = 5120,
+    val recSecondaryMaxConf: Float = 0.90f,
 )

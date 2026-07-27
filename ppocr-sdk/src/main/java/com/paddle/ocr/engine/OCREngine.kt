@@ -19,11 +19,15 @@ import android.graphics.Bitmap
 import com.paddle.ocr.EngineConfig
 import com.paddle.ocr.PaddleOCRConfig
 import com.paddle.ocr.model.ModelConfig
+import com.paddle.ocr.model.OCRBox
 import com.paddle.ocr.model.OCRError
 import com.paddle.ocr.model.OCRResult
 import com.paddle.ocr.postprocess.BoxSorter
 import com.paddle.ocr.postprocess.QuadTextCrop
+import com.paddle.ocr.preprocess.RecPreprocessor
 import com.paddle.ocr.util.BitmapUtils
+import kotlin.math.hypot
+import kotlin.math.max
 
 class OCREngine(
     context: Context,
@@ -32,10 +36,14 @@ class OCREngine(
     detModelAsset: String = "models/det/inference.onnx",
     recModelAsset: String = "models/rec/inference.onnx",
     recConfigAsset: String = "models/rec/inference.yml",
+    recModelAsset2: String? = null,
+    recConfigAsset2: String? = null,
 ) {
     private val ortManager = ORTSessionManager(context, engineConfig)
     private val detectionEngine: DetectionEngine
     private val recognitionEngine: RecognitionEngine
+    /** Optional second script's recognizer, sharing the same detection pass. */
+    private val recognitionEngine2: RecognitionEngine?
     val coldLoadTimeMs: Long get() = ortManager.coldLoadTimeMs
 
     init {
@@ -47,8 +55,20 @@ class OCREngine(
             ortManager.release()
             throw t
         }
+        val configured2 = if (recModelAsset2 != null && recConfigAsset2 != null) {
+            try {
+                ortManager.loadSecondaryRecognition(recModelAsset2)
+                ModelConfig.parse(context, recConfigAsset2)
+            } catch (t: Throwable) {
+                ortManager.release()
+                throw t
+            }
+        } else null
         detectionEngine = DetectionEngine(ortManager, config)
         recognitionEngine = RecognitionEngine(ortManager, configured.characterList)
+        recognitionEngine2 = configured2?.let {
+            RecognitionEngine(ortManager, it.characterList, secondary = true)
+        }
     }
 
     fun run(bitmap: Bitmap): OCREngineResult {
@@ -102,58 +122,100 @@ class OCREngine(
         var totalRecInfMs = 0L
         var totalRecPostMs = 0L
         var totalRecMs = 0L
-        val allResults = mutableListOf<OCRResult>()
         val recInputShapes = mutableListOf<List<Int>>()
-        val perLineRecMs = mutableListOf<Long>()
         val batchSize = config.recBatchSize.coerceAtLeast(1)
 
-        var i = 0
-        while (i < sortedBoxes.size) {
+        // Batch by crop shape rather than by reading order — see [RecBatchPlanner].
+        // The widths are predicted from the box geometry instead of the crops, so only
+        // one batch of crops is ever resident; a box whose predicted width is slightly
+        // off just lands in a neighbouring batch, which costs a little padding and
+        // nothing else.
+        val plan = RecBatchPlanner.plan(
+            inputWidths = sortedBoxes.map { RecPreprocessor.inputWidthFor(croppedAspectRatio(it)) },
+            maxBatchSize = batchSize,
+            maxPaddedWidth = config.recMaxBatchPaddedWidth,
+        )
+
+        // Recognition order is an internal detail: readings go back into reading-order
+        // slots so the returned list stays in the order the caller expects.
+        val slots = arrayOfNulls<OCRResult>(sortedBoxes.size)
+        val slotRecMs = arrayOfNulls<Long>(sortedBoxes.size)
+
+        for (batch in plan) {
             val batchCrops = mutableListOf<org.opencv.core.Mat>()
             val batchBoxIndices = mutableListOf<Int>()
-            var next = i
-            while (next < sortedBoxes.size && batchCrops.size < batchSize) {
-                val crop = QuadTextCrop.crop(srcMat, sortedBoxes[next])
+            for (boxIdx in batch) {
+                val crop = QuadTextCrop.crop(srcMat, sortedBoxes[boxIdx])
                 if (crop.rows() > 0 && crop.cols() > 0) {
                     batchCrops.add(crop)
-                    batchBoxIndices.add(next)
+                    batchBoxIndices.add(boxIdx)
                 } else {
                     crop.release()
                 }
-                next++
             }
+            if (batchCrops.isEmpty()) continue
 
             try {
-                if (batchCrops.isNotEmpty()) {
-                    val batchResult = recognitionEngine.recognize(batchCrops)
-                    totalRecPreMs += batchResult.preprocessMs
-                    totalRecInfMs += batchResult.inferenceMs
-                    totalRecPostMs += batchResult.postprocessMs
-                    totalRecMs += batchResult.timeMs
-                    recInputShapes.add(batchResult.inputShape)
-                    if (batchSize == 1) {
-                        perLineRecMs.add(batchResult.timeMs)
-                    }
+                val batchResult = recognitionEngine.recognize(batchCrops)
+                totalRecPreMs += batchResult.preprocessMs
+                totalRecInfMs += batchResult.inferenceMs
+                totalRecPostMs += batchResult.postprocessMs
+                totalRecMs += batchResult.timeMs
+                recInputShapes.add(batchResult.inputShape)
+                if (batchSize == 1) {
+                    batchBoxIndices.firstOrNull()?.let { slotRecMs[it] = batchResult.timeMs }
+                }
 
-                    for (j in batchResult.texts.indices) {
-                        val boxIdx = batchBoxIndices[j]
-                        val (text, confidence) = batchResult.texts[j]
-                        if (confidence >= config.recScoreThresh) {
-                            allResults.add(
-                                OCRResult(
-                                    box = sortedBoxes[boxIdx],
-                                    text = text,
-                                    confidence = confidence,
-                                )
-                            )
-                        }
+                // Second script's reading of the very same crops. Detection is
+                // script-agnostic, so only recognition is repeated — and only for the
+                // lines the primary model was unsure of, which is where a script
+                // mismatch actually shows up.
+                val uncertain = batchResult.texts.indices.filter {
+                    batchResult.texts[it].second < config.recSecondaryMaxConf
+                }
+                val alternates = HashMap<Int, Pair<String, Float>>()
+                if (recognitionEngine2 != null && uncertain.isNotEmpty()) {
+                    val altResult = recognitionEngine2.recognize(uncertain.map { batchCrops[it] })
+                    totalRecPreMs += altResult.preprocessMs
+                    totalRecInfMs += altResult.inferenceMs
+                    totalRecPostMs += altResult.postprocessMs
+                    totalRecMs += altResult.timeMs
+                    uncertain.forEachIndexed { position, j ->
+                        altResult.texts.getOrNull(position)?.let { alternates[j] = it }
+                    }
+                }
+
+                for (j in batchResult.texts.indices) {
+                    val boxIdx = batchBoxIndices[j]
+                    val (text, confidence) = batchResult.texts[j]
+                    val alt = alternates[j]
+                    // A model whose dictionary lacks the script on this line
+                    // decodes it as low-confidence noise, so the higher CTC score
+                    // identifies the right script. SECONDARY_MARGIN keeps the
+                    // primary model's reading unless the other one is clearly
+                    // better, since scores from two models are only loosely
+                    // comparable and near-ties should not flap.
+                    val useAlt = alt != null &&
+                        alt.first.isNotBlank() &&
+                        alt.second > confidence + SECONDARY_MARGIN
+                    val bestText = if (useAlt) alt!!.first else text
+                    val bestConf = if (useAlt) alt!!.second else confidence
+                    if (bestConf >= config.recScoreThresh && bestText.isNotBlank()) {
+                        slots[boxIdx] = OCRResult(
+                            box = sortedBoxes[boxIdx],
+                            text = bestText,
+                            confidence = bestConf,
+                            fromSecondary = useAlt,
+                        )
                     }
                 }
             } finally {
                 batchCrops.forEach { it.release() }
             }
-            i = next
         }
+
+        val allResults = slots.filterNotNull()
+        val perLineRecMs = slotRecMs.filterNotNull()
 
         val totalElapsed = System.currentTimeMillis() - totalStart
         val pipelineOverhead = totalElapsed - detResult.timeMs - totalRecMs
@@ -180,5 +242,30 @@ class OCREngine(
 
     fun release() {
         ortManager.release()
+    }
+
+    /**
+     * Width-to-height ratio of the crop [box] will produce, which is what decides how
+     * much of a recognition batch it occupies. A box taller than it is wide is rotated
+     * upright by [QuadTextCrop], so its ratio inverts along with it.
+     */
+    private fun croppedAspectRatio(box: OCRBox): Double {
+        val p = box.points
+        val width = max(
+            hypot(p[0].x - p[1].x, p[0].y - p[1].y),
+            hypot(p[2].x - p[3].x, p[2].y - p[3].y),
+        ).toDouble()
+        val height = max(
+            hypot(p[0].x - p[3].x, p[0].y - p[3].y),
+            hypot(p[1].x - p[2].x, p[1].y - p[2].y),
+        ).toDouble()
+        if (width <= 0.0 || height <= 0.0) return 1.0
+        return if (height / width >= QuadTextCrop.VERTICAL_CROP_RATIO) height / width
+        else width / height
+    }
+
+    private companion object {
+        /** How much better the secondary model must score to win a box. */
+        const val SECONDARY_MARGIN = 0.05f
     }
 }

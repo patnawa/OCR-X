@@ -21,9 +21,18 @@ data class ModelConfig(
     val characterList: List<String>,
 ) {
     companion object {
+        /**
+         * Reads a recognition config from the APK assets or, when [assetPath] is
+         * absolute, from the filesystem — so dictionaries that ship with a
+         * downloaded model can be parsed the same way as bundled ones.
+         */
         fun parse(context: Context, assetPath: String): ModelConfig {
             val content = try {
-                context.assets.open(assetPath).bufferedReader().use { it.readText() }
+                if (assetPath.startsWith("/")) {
+                    java.io.File(assetPath).readText()
+                } else {
+                    context.assets.open(assetPath).bufferedReader().use { it.readText() }
+                }
             } catch (t: Throwable) {
                 throw OCRError.ConfigParseFailed(assetPath, t)
             }

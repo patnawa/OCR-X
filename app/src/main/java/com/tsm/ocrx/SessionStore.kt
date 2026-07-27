@@ -3,6 +3,7 @@ package com.tsm.ocrx
 import android.content.Context
 import com.tsm.ocrx.ocr.OcrLanguage
 import com.tsm.ocrx.ocr.OcrMode
+import com.tsm.ocrx.ocr.OcrSettings
 import com.tsm.ocrx.translate.Language
 import com.tsm.ocrx.translate.TranslationEngine
 import com.tsm.ocrx.translate.TranslationMode
@@ -15,6 +16,7 @@ data class RestoredSession(
     val mode: OcrMode,
     val language: OcrLanguage,
     val cropEnabled: Boolean,
+    val settings: OcrSettings,
     val targetLang: Language,
     val translationMode: TranslationMode,
     val translatedText: String,
@@ -37,6 +39,7 @@ class SessionStore(context: Context) {
         mode: OcrMode,
         language: OcrLanguage,
         cropEnabled: Boolean,
+        settings: OcrSettings,
         targetLang: Language,
         translationMode: TranslationMode,
         translatedText: String,
@@ -47,6 +50,9 @@ class SessionStore(context: Context) {
             .put("ocrMode", mode.name)
             .put("ocrLang", language.name)
             .put("crop", cropEnabled)
+            .put("mixedScript", settings.mixedScript)
+            .put("deskew", settings.deskew)
+            .put("nnapi", settings.useNnapi)
             .put("targetLang", targetLang.code)
             .put("mode", translationMode.name)
             .put("translated", translatedText)
@@ -63,7 +69,8 @@ class SessionStore(context: Context) {
             val texts = json.optJSONArray("pages")?.let { arr ->
                 (0 until arr.length()).map { arr.getString(it) }.filter { it.isNotBlank() }
             }.orEmpty()
-            if (texts.isEmpty()) return null
+            // Restored even with no pages: the accuracy settings and chosen script are
+            // worth keeping on their own, and an empty page list is a valid session.
             RestoredSession(
                 multiMode = json.optBoolean("multiMode", false),
                 mode = runCatching { OcrMode.valueOf(json.optString("ocrMode")) }
@@ -71,6 +78,11 @@ class SessionStore(context: Context) {
                 language = runCatching { OcrLanguage.valueOf(json.optString("ocrLang")) }
                     .getOrDefault(OcrLanguage.LATIN),
                 cropEnabled = json.optBoolean("crop", true),
+                settings = OcrSettings(
+                    mixedScript = json.optBoolean("mixedScript", true),
+                    deskew = json.optBoolean("deskew", true),
+                    useNnapi = json.optBoolean("nnapi", false)
+                ),
                 targetLang = TranslationEngine.LANGUAGES
                     .firstOrNull { it.code == json.optString("targetLang") }
                     ?: TranslationEngine.LANGUAGES.first(),

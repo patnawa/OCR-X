@@ -12,9 +12,10 @@ android {
         applicationId = "com.tsm.ocrx"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 5
+        versionName = "1.4"
         vectorDrawables { useSupportLibrary = true }
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // PP-OCRv6 ships native libs (ONNX Runtime + OpenCV). Cover real phones
         // (arm64 + 32-bit arm) and the standard x86_64 emulator so the OpenCV /
         // ONNX .so files are present for the device's CPU.
@@ -89,4 +90,12 @@ dependencies {
 
     // JVM unit tests for the pure OCR pipeline (Layout column detection, parsing).
     testImplementation("junit:junit:4.13.2")
+
+    // Instrumented accuracy harness: runs the real ONNX engine on a device and
+    // reports CER/WER against a golden image set.
+    androidTestImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:rules:1.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
 }

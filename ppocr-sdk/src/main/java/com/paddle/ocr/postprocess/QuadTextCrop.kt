@@ -26,7 +26,8 @@ import kotlin.math.hypot
 import kotlin.math.max
 
 object QuadTextCrop {
-    private const val VERTICAL_CROP_RATIO = 1.5
+    /** Crops at least this much taller than wide are rotated upright. */
+    internal const val VERTICAL_CROP_RATIO = 1.5
 
     fun crop(src: Mat, box: OCRBox): Mat {
         // Align with PaddleX CropByPolys.get_minarea_rect_crop: recompute minAreaRect

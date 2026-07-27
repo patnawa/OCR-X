@@ -14,6 +14,21 @@
 
 package com.paddle.ocr
 
+/**
+ * Runtime tuning for the ONNX Runtime sessions.
+ *
+ * @param numThreads   intra-op thread count for CPU execution.
+ * @param useXnnpack   register the XNNPACK execution provider when the runtime
+ *                     exposes it. XNNPACK is a CPU backend, so it cannot change
+ *                     numerics the way an NPU can; it is safe to leave enabled and
+ *                     is silently skipped on builds that do not ship it.
+ * @param useNnapi     register the NNAPI execution provider. Opt-in: NNAPI delegates
+ *                     to vendor NPU/DSP drivers whose quality varies by device, and
+ *                     unsupported operators fall back with a per-partition cost that
+ *                     can end up slower than plain CPU.
+ */
 data class EngineConfig(
     val numThreads: Int = 4,
+    val useXnnpack: Boolean = false,
+    val useNnapi: Boolean = false,
 )

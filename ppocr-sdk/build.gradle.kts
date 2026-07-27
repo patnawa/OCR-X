@@ -30,7 +30,13 @@ dependencies {
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.21.1")
     // Official OpenCV 4.11 (modern NDK/libc++) — 4.5.3 needed a libc++ symbol
     // (__sfp_handle_exceptions) that ONNX Runtime's newer libc++_shared.so drops.
-    implementation("org.opencv:opencv:4.11.0")
+    // Exposed as `api` so consumers can run their own OpenCV passes (deskew,
+    // ruled-line table detection) against the same native library this loads.
+    api("org.opencv:opencv:4.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("androidx.core:core-ktx:1.15.0")
+
+    // JVM unit tests for the parts of the pipeline that are pure Kotlin
+    // (recognition batch planning).
+    testImplementation("junit:junit:4.13.2")
 }

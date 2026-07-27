@@ -14,9 +14,17 @@
 
 package com.paddle.ocr.model
 
+/**
+ * One recognized text line.
+ *
+ * @param fromSecondary true when this reading came from the secondary recognition
+ *                      model rather than the primary one — i.e. the box was routed
+ *                      to the other script because that model scored it higher.
+ */
 data class OCRResult(
     val box: OCRBox,
     val text: String,
     val confidence: Float,
     val wordBoxes: List<OCRBox>? = null,
+    val fromSecondary: Boolean = false,
 )

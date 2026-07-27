@@ -18,9 +18,17 @@ import com.paddle.ocr.postprocess.CTCDecoder
 import com.paddle.ocr.preprocess.RecPreprocessor
 import org.opencv.core.Mat
 
+/**
+ * Decodes text from cropped text-line images.
+ *
+ * @param secondary routes inference to the manager's secondary recognition session.
+ *                  Two instances can therefore share one detection pass, each with
+ *                  its own script's model and character dictionary.
+ */
 class RecognitionEngine(
     private val ortManager: ORTSessionManager,
     private val characterList: List<String>,
+    private val secondary: Boolean = false,
 ) {
     data class RecognitionResult(
         val texts: List<Pair<String, Float>>,
@@ -39,7 +47,9 @@ class RecognitionEngine(
 
         // Inference
         val infStart = System.currentTimeMillis()
-        val (outputData, outputShape) = ortManager.runRecognition(preResult.tensorData, preResult.shape)
+        val (outputData, outputShape) =
+            if (secondary) ortManager.runRecognitionSecondary(preResult.tensorData, preResult.shape)
+            else ortManager.runRecognition(preResult.tensorData, preResult.shape)
         val inferenceMs = System.currentTimeMillis() - infStart
 
         // Postprocess (CTC decode)

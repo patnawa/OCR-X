@@ -6,9 +6,19 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.tsm.ocrx.model.OcrResult
 import com.tsm.ocrx.model.ScanConfidence
+import com.tsm.ocrx.model.ScanGeometry
+import com.tsm.ocrx.ocr.DownloadResult
+import com.tsm.ocrx.ocr.ExtractedFields
+import com.tsm.ocrx.ocr.FieldExtractor
 import com.tsm.ocrx.ocr.OcrEngine
 import com.tsm.ocrx.ocr.OcrLanguage
 import com.tsm.ocrx.ocr.OcrMode
+import com.tsm.ocrx.ocr.OcrModelStore
+import com.tsm.ocrx.ocr.OcrSettings
+import com.tsm.ocrx.ocr.PaddleEngine
+import com.tsm.ocrx.ocr.PdfImporter
+import com.tsm.ocrx.ocr.RecModel
+import com.tsm.ocrx.ocr.TextBox
 import com.tsm.ocrx.translate.Language
 import com.tsm.ocrx.translate.TranslationEngine
 import com.tsm.ocrx.translate.TranslationMode
@@ -33,6 +43,13 @@ sealed interface TranslateStatus {
     data class Error(val message: String) : TranslateStatus
 }
 
+/** Progress of an on-demand recognition model download. */
+sealed interface ModelDownload {
+    data object Idle : ModelDownload
+    data class Running(val model: RecModel, val progress: Float) : ModelDownload
+    data class Failed(val model: RecModel, val message: String) : ModelDownload
+}
+
 /** One scanned image and the (possibly edited) text recognized from it. */
 data class Page(
     val id: Long,
@@ -40,7 +57,11 @@ data class Page(
     val status: OcrStatus,
     val text: String = "",
     // Scan-time OCR confidence; null when restored from storage (not persisted).
-    val confidence: ScanConfidence? = null
+    val confidence: ScanConfidence? = null,
+    // Scan-time line geometry, backing the row inspector. Also not persisted.
+    val geometry: ScanGeometry? = null,
+    /** Cells the post-OCR corrector repaired on this page, as "before → after". */
+    val corrections: List<String> = emptyList()
 )
 
 data class OcrUiState(
@@ -48,11 +69,18 @@ data class OcrUiState(
     val mode: OcrMode = OcrMode.QUALITY,
     val language: OcrLanguage = OcrLanguage.LATIN,
     val cropEnabled: Boolean = true,
+    val settings: OcrSettings = OcrSettings(),
     val pages: List<Page> = emptyList(),
     val targetLang: Language = TranslationEngine.LANGUAGES.first(),
     val translationMode: TranslationMode = TranslationMode.OFFLINE,
     val translateStatus: TranslateStatus = TranslateStatus.Idle,
-    val translatedText: String = ""
+    val translatedText: String = "",
+    val modelDownload: ModelDownload = ModelDownload.Idle,
+    /** Recognition models currently installed, for the language picker and manager. */
+    val installedModels: Set<RecModel> = emptySet(),
+    /** Set when the chosen language's model still has to be downloaded. */
+    val missingModel: RecModel? = null,
+    val notice: String? = null
 ) {
     val isEmpty: Boolean get() = pages.isEmpty()
     val isProcessing: Boolean get() = pages.any { it.status is OcrStatus.Processing }
@@ -85,7 +113,37 @@ data class OcrUiState(
     /** Confidence of a rendered table row, or null if unknown (edited/restored). */
     fun rowConfidence(cells: List<String>): Float? =
         mergedConfidence[ScanConfidence.keyOf(cells.joinToString(""))]
+
+    /**
+     * Where a rendered table row came from in its source image, so the UI can show
+     * the original pixels. Null once the text has been edited or restored, since the
+     * geometry is a scan-time signal that is not persisted.
+     */
+    fun rowSource(cells: List<String>): RowSource? {
+        val key = ScanConfidence.keyOf(cells.joinToString(""))
+        for (page in pages) {
+            val geometry = page.geometry ?: continue
+            val box = geometry.byLine[key] ?: continue
+            val path = geometry.imagePath ?: continue
+            return RowSource(path, box, geometry.imageWidth, geometry.imageHeight)
+        }
+        return null
+    }
+
+    /** Fields extracted from the combined text (vendor, date, total, …). */
+    val fields: ExtractedFields get() = FieldExtractor.extract(combinedText)
+
+    /** All post-OCR repairs across pages, for the review banner. */
+    val corrections: List<String> get() = pages.flatMap { it.corrections }
 }
+
+/** A table row's origin in the scanned image, for the inspector. */
+data class RowSource(
+    val imagePath: String,
+    val box: TextBox,
+    val imageWidth: Int,
+    val imageHeight: Int
+)
 
 class OcrViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -108,6 +166,7 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
                 mode = r.mode,
                 language = r.language,
                 cropEnabled = r.cropEnabled,
+                settings = r.settings,
                 pages = pages,
                 targetLang = r.targetLang,
                 translationMode = r.translationMode,
@@ -115,6 +174,8 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
                 translatedText = r.translatedText
             )
         }
+        refreshInstalledModels()
+        warmUpEngine()
         // Persist on every change (skip the initial value) so the session survives
         // the process being killed in the background.
         viewModelScope.launch {
@@ -128,6 +189,7 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
                         mode = s.mode,
                         language = s.language,
                         cropEnabled = s.cropEnabled,
+                        settings = s.settings,
                         targetLang = s.targetLang,
                         translationMode = s.translationMode,
                         translatedText = s.translatedText,
@@ -158,12 +220,101 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(mode = mode)
     }
 
+    /**
+     * Selects the recognition script. When its model is not installed the selection
+     * still sticks — the UI then offers the download rather than silently reverting a
+     * choice the user just made.
+     */
     fun setLanguage(language: OcrLanguage) {
-        _state.value = _state.value.copy(language = language)
+        val app = getApplication<Application>()
+        val missing = if (OcrModelStore.isInstalled(app, language.model)) null else language.model
+        _state.value = _state.value.copy(language = language, missingModel = missing)
+        if (missing == null) warmUpEngine()
     }
 
     fun setCropEnabled(enabled: Boolean) {
         _state.value = _state.value.copy(cropEnabled = enabled)
+    }
+
+    fun setMixedScript(enabled: Boolean) {
+        _state.value = _state.value.copy(
+            settings = _state.value.settings.copy(mixedScript = enabled)
+        )
+        warmUpEngine()
+    }
+
+    fun setDeskew(enabled: Boolean) {
+        _state.value = _state.value.copy(settings = _state.value.settings.copy(deskew = enabled))
+    }
+
+    fun setUseNnapi(enabled: Boolean) {
+        _state.value = _state.value.copy(settings = _state.value.settings.copy(useNnapi = enabled))
+        warmUpEngine()
+    }
+
+    fun dismissNotice() {
+        _state.value = _state.value.copy(notice = null)
+    }
+
+    /* ---- Recognition models ---- */
+
+    private fun refreshInstalledModels() {
+        val app = getApplication<Application>()
+        val installed = RecModel.entries.filter { OcrModelStore.isInstalled(app, it) }.toSet()
+        val language = _state.value.language
+        _state.value = _state.value.copy(
+            installedModels = installed,
+            missingModel = if (language.model in installed) null else language.model
+        )
+    }
+
+    /** Bytes a downloaded model occupies, for the manager screen. */
+    fun modelSizeOnDisk(model: RecModel): Long =
+        OcrModelStore.downloadedBytes(getApplication(), model)
+
+    fun isModelDownloaded(model: RecModel): Boolean =
+        OcrModelStore.isDownloaded(getApplication(), model)
+
+    fun downloadModel(model: RecModel) {
+        if (_state.value.modelDownload is ModelDownload.Running) return
+        _state.value = _state.value.copy(modelDownload = ModelDownload.Running(model, 0f))
+        viewModelScope.launch {
+            val result = OcrModelStore.download(getApplication(), model) { progress ->
+                _state.value = _state.value.copy(modelDownload = ModelDownload.Running(model, progress))
+            }
+            when (result) {
+                is DownloadResult.Success -> {
+                    _state.value = _state.value.copy(
+                        modelDownload = ModelDownload.Idle,
+                        notice = "${model.displayName} is ready — it now works offline."
+                    )
+                    refreshInstalledModels()
+                    warmUpEngine()
+                }
+                is DownloadResult.Failed ->
+                    _state.value = _state.value.copy(
+                        modelDownload = ModelDownload.Failed(model, result.message)
+                    )
+            }
+        }
+    }
+
+    fun deleteModel(model: RecModel) {
+        OcrModelStore.delete(getApplication(), model)
+        refreshInstalledModels()
+    }
+
+    /**
+     * Builds the ONNX sessions in the background so the first scan does not pay the
+     * model load. Safe to call repeatedly — the engine rebuilds only when the
+     * language or accuracy settings actually changed.
+     */
+    private fun warmUpEngine() {
+        val s = _state.value
+        if (!OcrModelStore.isInstalled(getApplication(), s.language.model)) return
+        PaddleEngine.warmUp(
+            getApplication(), s.language, s.settings.mixedScript, s.settings.useNnapi
+        )
     }
 
     fun setTargetLang(lang: Language) {
@@ -226,41 +377,124 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Adds an image. In multi mode it appends a page; otherwise it replaces. */
-    fun onImagePicked(uri: Uri) {
-        val page = Page(id = nextId++, imageUri = uri, status = OcrStatus.Processing)
-        val pages = if (_state.value.multiMode) _state.value.pages + page else listOf(page)
+    fun onImagePicked(uri: Uri) = onImagesPicked(listOf(uri))
+
+    /**
+     * Adds one or more images. Several at once always append as pages — selecting a
+     * batch is an unambiguous request for multiple pages, so multi mode is turned on
+     * rather than throwing all but the last away.
+     */
+    fun onImagesPicked(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        val multi = _state.value.multiMode || uris.size > 1
+        val newPages = uris.map { Page(id = nextId++, imageUri = it, status = OcrStatus.Processing) }
+        val pages = if (multi) _state.value.pages + newPages else newPages
         _state.value = _state.value.copy(
+            multiMode = multi,
             pages = pages,
             translateStatus = TranslateStatus.Idle,
             translatedText = ""
         )
-        process(page.id, uri)
+        // Pages are scanned one at a time: the engine holds a single ONNX session and
+        // each scan already saturates the CPU, so concurrency would only add memory
+        // pressure on the OEM killers this app has to survive.
+        viewModelScope.launch {
+            newPages.zip(uris).forEach { (page, uri) -> process(page.id, uri) }
+        }
     }
 
-    private fun process(id: Long, uri: Uri) {
+    /** Renders a PDF's pages and scans them as a multi-page session. */
+    fun onPdfPicked(uri: Uri) {
+        _state.value = _state.value.copy(notice = "Rendering PDF…")
         viewModelScope.launch {
-            val update: (OcrStatus, String, ScanConfidence?) -> Unit = { status, text, conf ->
+            try {
+                val imported = PdfImporter.importPages(getApplication(), uri, _state.value.mode.maxLongEdge)
+                _state.value = _state.value.copy(
+                    notice = if (imported.skipped > 0)
+                        "Imported ${imported.uris.size} of ${imported.totalPages} pages " +
+                            "(limit ${PdfImporter.MAX_PAGES})."
+                    else null
+                )
+                onImagesPicked(imported.uris)
+            } catch (e: Exception) {
+                android.util.Log.e("OcrX", "PDF import failed", e)
+                _state.value = _state.value.copy(notice = e.message ?: "Could not import that PDF.")
+            }
+        }
+    }
+
+    private suspend fun process(id: Long, uri: Uri) {
+        val update: (OcrStatus, String, ScanConfidence?, ScanGeometry?, List<String>) -> Unit =
+            { status, text, conf, geometry, corrections ->
                 _state.value = _state.value.copy(
                     pages = _state.value.pages.map {
-                        if (it.id == id) it.copy(status = status, text = text, confidence = conf) else it
+                        if (it.id == id) it.copy(
+                            status = status,
+                            text = text,
+                            confidence = conf,
+                            geometry = geometry,
+                            corrections = corrections
+                        ) else it
                     }
                 )
             }
-            try {
-                val recognized = OcrEngine.recognize(
-                    getApplication(), uri, _state.value.mode, _state.value.language
+        try {
+            val recognized = OcrEngine.recognize(
+                context = getApplication(),
+                imageUri = uri,
+                mode = _state.value.mode,
+                language = _state.value.language,
+                settings = _state.value.settings,
+                cacheKey = "page-$id"
+            )
+            update(
+                OcrStatus.Done, recognized.text, recognized.confidence,
+                recognized.geometry, recognized.corrections
+            )
+            if (recognized.failedSumColumns > 0) {
+                _state.value = _state.value.copy(
+                    notice = "A column's total does not match the rows above it — check the amounts."
                 )
-                update(OcrStatus.Done, recognized.text, recognized.confidence)
-            } catch (e: Exception) {
-                val chain = generateSequence(e as Throwable) { it.cause }
-                    .mapNotNull { it.message?.takeIf { m -> m.isNotBlank() } }
-                    .toList()
-                    .distinct()
-                    .joinToString(" ← ")
-                android.util.Log.e("OcrX", "OCR failed", e)
-                update(OcrStatus.Error(chain.ifBlank { "OCR failed" }), "", null)
             }
+        } catch (e: Exception) {
+            if (e is PaddleEngine.ModelMissing) {
+                refreshInstalledModels()
+                update(
+                    OcrStatus.Error("Download the ${e.model.displayName} model to scan this script."),
+                    "", null, null, emptyList()
+                )
+                return
+            }
+            val chain = generateSequence(e as Throwable) { it.cause }
+                .mapNotNull { it.message?.takeIf { m -> m.isNotBlank() } }
+                .toList()
+                .distinct()
+                .joinToString(" ← ")
+            android.util.Log.e("OcrX", "OCR failed", e)
+            update(OcrStatus.Error(chain.ifBlank { "OCR failed" }), "", null, null, emptyList())
         }
+    }
+
+    /**
+     * Replaces the source line a rendered table row came from with [newText].
+     *
+     * The table is a projection of the pages' text, so a correction made in the row
+     * inspector has to be written back to whichever page produced that line. Matching
+     * on the whitespace-insensitive key is what makes this survive the tab/space
+     * round-trip between the raw text and the rendered grid.
+     */
+    fun updateRow(cells: List<String>, newText: String) {
+        val key = ScanConfidence.keyOf(cells.joinToString(""))
+        var replaced = false
+        val pages = _state.value.pages.map { page ->
+            if (replaced) return@map page
+            val lines = page.text.split('\n')
+            val index = lines.indexOfFirst { ScanConfidence.keyOf(it) == key }
+            if (index < 0) return@map page
+            replaced = true
+            page.copy(text = lines.toMutableList().also { it[index] = newText }.joinToString("\n"))
+        }
+        if (replaced) _state.value = _state.value.copy(pages = pages)
     }
 
     fun onPageTextChanged(id: Long, newText: String) {
@@ -279,8 +513,9 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun reset() {
-        _state.value = _state.value.copy(pages = emptyList())
+        _state.value = _state.value.copy(pages = emptyList(), notice = null)
         clearTranslation()
+        PaddleEngine.clearScanCache(getApplication())
         sessionId = System.currentTimeMillis()   // next scans become a new history entry
     }
 

@@ -1,6 +1,7 @@
 package com.tsm.ocrx
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
@@ -50,7 +51,10 @@ import com.tsm.ocrx.translate.Language
 import com.tsm.ocrx.translate.TranslationEngine
 import com.tsm.ocrx.translate.TranslationMode
 import com.tsm.ocrx.model.ScanConfidence
+import com.tsm.ocrx.ocr.OcrEngine
 import com.tsm.ocrx.ocr.OcrLanguage
+import com.tsm.ocrx.ocr.PdfImporter
+import com.tsm.ocrx.ocr.RecModel
 import com.tsm.ocrx.ui.theme.ChipShape
 import com.tsm.ocrx.ui.theme.OcrXTheme
 import com.tsm.ocrx.ui.theme.PanelShape
@@ -103,6 +107,28 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
         return
     }
 
+    val clipboard = LocalClipboardManager.current
+    // The table row currently being verified against its source pixels, with the
+    // cells it was rendered from so an edit can be written back to the right line.
+    var inspecting by remember { mutableStateOf<Pair<RowSource, List<String>>?>(null) }
+
+    inspecting?.let { (source, cells) ->
+        RowInspectorDialog(
+            source = source,
+            text = cells.joinToString("\t"),
+            onTextChange = { vm.updateRow(cells, it) },
+            onDismiss = { inspecting = null }
+        )
+    }
+
+    // One-off messages from the view model (downloads, PDF import, sum mismatches).
+    LaunchedEffect(state.notice) {
+        state.notice?.let {
+            snackbar.showSnackbar(it)
+            vm.dismissNotice()
+        }
+    }
+
     // rememberSaveable: these must survive process death while the camera /
     // picker / crop screen is in the foreground and the OS reclaims our
     // process, otherwise the returning result is silently dropped.
@@ -135,9 +161,21 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
         }
     }
 
+    // Multi-select: a batch is always appended as pages, and cropping is skipped —
+    // stepping through a crop screen per image would defeat the point of the batch.
     val galleryLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickVisualMedia()
-    ) { uri -> if (uri != null) onImageReady(uri) }
+        ActivityResultContracts.PickMultipleVisualMedia(PdfImporter.MAX_PAGES)
+    ) { uris ->
+        when {
+            uris.isEmpty() -> Unit
+            uris.size == 1 -> onImageReady(uris.first())
+            else -> vm.onImagesPicked(uris)
+        }
+    }
+
+    val pdfLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> if (uri != null) vm.onPdfPicked(uri) }
 
     val cameraLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicture()
@@ -190,6 +228,42 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
         )
     }
 
+    fun launchPdf() {
+        pdfLauncher.launch(arrayOf("application/pdf"))
+    }
+
+    /**
+     * Writes the current table to the cache and hands it to the share sheet. Export
+     * via the file picker answers "keep this"; sharing answers "send this to someone",
+     * which is the more common end of a scan.
+     */
+    fun shareExport(format: ExportFormat) {
+        scope.launch {
+            val result = state.table
+            val uri = withContext(Dispatchers.IO) {
+                try {
+                    val dir = java.io.File(context.cacheDir, "shared").apply { mkdirs() }
+                    dir.listFiles()?.forEach { it.delete() }
+                    val file = java.io.File(dir, "ocr-x-export.${format.extension}")
+                    file.outputStream().use { Exporters.write(format, result, it) }
+                    FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            if (uri == null) {
+                snackbar.showSnackbar("Could not prepare the file")
+                return@launch
+            }
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = format.mimeType
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(intent, "Share ${format.label}"))
+        }
+    }
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbar) },
@@ -214,6 +288,7 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
                 mode = state.mode,
                 onModeChange = { vm.setMode(it) },
                 language = state.language,
+                installedModels = state.installedModels,
                 onLanguageChange = { vm.setLanguage(it) },
                 cropEnabled = state.cropEnabled,
                 onCropToggle = { vm.setCropEnabled(it) },
@@ -221,11 +296,38 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
                 onMultiToggle = { vm.setMultiMode(it) }
             )
 
+            state.missingModel?.let { missing ->
+                MissingModelBanner(
+                    model = missing,
+                    download = state.modelDownload,
+                    onDownload = { vm.downloadModel(missing) }
+                )
+            }
+
+            AccuracyPanel(
+                settings = state.settings,
+                partnerName = state.language.mixedScriptPartner
+                    ?.takeIf { it in state.installedModels }?.displayName,
+                onMixedScript = { vm.setMixedScript(it) },
+                onDeskew = { vm.setDeskew(it) },
+                onNnapi = { vm.setUseNnapi(it) }
+            )
+
+            OcrModelPanel(
+                installed = state.installedModels,
+                download = state.modelDownload,
+                sizeOnDisk = { vm.modelSizeOnDisk(it) },
+                isRemovable = { vm.isModelDownloaded(it) },
+                onDownload = { vm.downloadModel(it) },
+                onDelete = { vm.deleteModel(it) }
+            )
+
             SourceButtons(
                 multiMode = state.multiMode,
                 hasPages = !state.isEmpty,
                 onCamera = ::launchCamera,
-                onGallery = ::launchGallery
+                onGallery = ::launchGallery,
+                onPdf = ::launchPdf
             )
 
             if (state.isEmpty) {
@@ -243,15 +345,25 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
 
                 val combined = state.table
                 if (combined.rows.isNotEmpty()) {
+                    CorrectionsBanner(state.corrections)
+
+                    FieldsPanel(state.fields) { value ->
+                        clipboard.setText(AnnotatedString(value))
+                        scope.launch { snackbar.showSnackbar("Copied $value") }
+                    }
+
                     ExportSection(
                         rows = combined.rows,
                         pageCount = state.pages.size,
                         multiMode = state.multiMode,
                         combinedText = combined.rawText,
+                        tsv = OcrEngine.toTsv(combined),
                         overallConfidence = state.overallConfidence,
                         rowConfidence = { state.rowConfidence(it) },
+                        onRowClick = { row -> inspecting = state.rowSource(row)?.let { it to row } },
                         onCopy = { scope.launch { snackbar.showSnackbar("Text copied") } },
-                        onExport = { startExport(it, false) }
+                        onExport = { startExport(it, false) },
+                        onShare = { shareExport(it) }
                     )
 
                     TranslationPanel(
@@ -339,7 +451,7 @@ private fun OutlinedIconButton(onClick: () -> Unit, icon: ImageVector, desc: Str
 }
 
 @Composable
-private fun IndustrialPanel(
+internal fun IndustrialPanel(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit
 ) {
@@ -354,7 +466,7 @@ private fun IndustrialPanel(
 }
 
 @Composable
-private fun SectionLabel(text: String, trailing: String? = null) {
+internal fun SectionLabel(text: String, trailing: String? = null) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Box(
             Modifier
@@ -392,6 +504,7 @@ private fun SettingsPanel(
     mode: OcrMode,
     onModeChange: (OcrMode) -> Unit,
     language: OcrLanguage,
+    installedModels: Set<RecModel>,
     onLanguageChange: (OcrLanguage) -> Unit,
     cropEnabled: Boolean,
     onCropToggle: (Boolean) -> Unit,
@@ -399,7 +512,7 @@ private fun SettingsPanel(
     onMultiToggle: (Boolean) -> Unit
 ) {
     IndustrialPanel {
-        SectionLabel("Scan mode", "PP-OCRv6")
+        SectionLabel("Scan mode", "PP-OCR")
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OcrMode.entries.forEach { m ->
@@ -409,7 +522,7 @@ private fun SettingsPanel(
             }
         }
         Spacer(Modifier.height(12.dp))
-        OcrLanguageRow(language, onLanguageChange)
+        OcrLanguageRow(language, installedModels, onLanguageChange)
         Spacer(Modifier.height(4.dp))
         HorizontalDivider(color = MaterialTheme.colorScheme.outline)
         ToggleRow(Icons.Filled.Crop, "Crop before scan", "Select just the text area", cropEnabled, onCropToggle)
@@ -421,6 +534,7 @@ private fun SettingsPanel(
 @Composable
 private fun OcrLanguageRow(
     language: OcrLanguage,
+    installedModels: Set<RecModel>,
     onLanguageChange: (OcrLanguage) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -449,8 +563,21 @@ private fun OcrLanguageRow(
             }
             DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 OcrLanguage.entries.forEach { lang ->
+                    val needsDownload = lang.model !in installedModels
                     DropdownMenuItem(
                         text = { Text(lang.displayName) },
+                        // Languages whose model is not on the device stay selectable:
+                        // choosing one is how the user asks for the download.
+                        trailingIcon = if (needsDownload) {
+                            {
+                                Icon(
+                                    Icons.Filled.Download,
+                                    contentDescription = "Needs download",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        } else null,
                         onClick = { onLanguageChange(lang); expanded = false }
                     )
                 }
@@ -501,12 +628,13 @@ private fun ModeChip(
 }
 
 @Composable
-private fun ToggleRow(
+internal fun ToggleRow(
     icon: ImageVector,
     title: String,
     subtitle: String,
     checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+    onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
@@ -521,6 +649,7 @@ private fun ToggleRow(
         Switch(
             checked = checked,
             onCheckedChange = onCheckedChange,
+            enabled = enabled,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
                 checkedTrackColor = MaterialTheme.colorScheme.primary
@@ -538,7 +667,8 @@ private fun SourceButtons(
     multiMode: Boolean,
     hasPages: Boolean,
     onCamera: () -> Unit,
-    onGallery: () -> Unit
+    onGallery: () -> Unit,
+    onPdf: () -> Unit
 ) {
     val camera = if (multiMode && hasPages) "ADD PHOTO" else "CAMERA"
     val gallery = if (multiMode && hasPages) "ADD IMAGE" else "GALLERY"
@@ -567,6 +697,18 @@ private fun SourceButtons(
             Spacer(Modifier.width(8.dp))
             Text(gallery, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, fontSize = 13.sp)
         }
+    }
+    Spacer(Modifier.height(10.dp))
+    OutlinedButton(
+        onClick = onPdf,
+        shape = ChipShape,
+        modifier = Modifier.fillMaxWidth().height(46.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onBackground)
+    ) {
+        Icon(Icons.Filled.PictureAsPdf, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text("IMPORT PDF", fontWeight = FontWeight.Bold, letterSpacing = 1.sp, fontSize = 12.sp)
     }
 }
 
@@ -723,10 +865,13 @@ private fun ExportSection(
     pageCount: Int,
     multiMode: Boolean,
     combinedText: String,
+    tsv: String,
     overallConfidence: Float?,
     rowConfidence: (List<String>) -> Float?,
+    onRowClick: (List<String>) -> Unit,
     onCopy: () -> Unit,
-    onExport: (ExportFormat) -> Unit
+    onExport: (ExportFormat) -> Unit,
+    onShare: (ExportFormat) -> Unit
 ) {
     val clipboard = LocalClipboardManager.current
     val base = if (multiMode) "$pageCount scans · ${rows.size} lines" else "${rows.size} lines"
@@ -739,21 +884,46 @@ private fun ExportSection(
             ConfidenceWarning(low = overallConfidence < ScanConfidence.LOW)
         }
         Spacer(Modifier.height(10.dp))
-        TablePreview(rows, rowConfidence)
+        TablePreview(rows, rowConfidence, onRowClick)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Tap a row to check it against the original image.",
+            fontFamily = FontFamily.Monospace,
+            fontSize = 9.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         Spacer(Modifier.height(10.dp))
-        OutlinedButton(
-            onClick = {
-                clipboard.setText(AnnotatedString(combinedText))
-                onCopy()
-            },
-            shape = ChipShape,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onBackground),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(8.dp))
-            Text("COPY TEXT", fontWeight = FontWeight.Bold, letterSpacing = 1.sp, fontSize = 12.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedButton(
+                onClick = {
+                    clipboard.setText(AnnotatedString(combinedText))
+                    onCopy()
+                },
+                shape = ChipShape,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onBackground),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("COPY TEXT", fontWeight = FontWeight.Bold, letterSpacing = 1.sp, fontSize = 11.sp)
+            }
+            // Tab-separated is what spreadsheets paste straight into cells, so this
+            // skips the whole save-then-open round trip for the common case.
+            OutlinedButton(
+                onClick = {
+                    clipboard.setText(AnnotatedString(tsv))
+                    onCopy()
+                },
+                shape = ChipShape,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Filled.TableView, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("COPY CELLS", fontWeight = FontWeight.Bold, letterSpacing = 1.sp, fontSize = 11.sp)
+            }
         }
     }
 
@@ -763,6 +933,11 @@ private fun ExportSection(
         SectionLabel("Export")
         Spacer(Modifier.height(10.dp))
         ExportGrid(onExport)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+        Spacer(Modifier.height(10.dp))
+        SectionLabel("Share")
+        Spacer(Modifier.height(10.dp))
+        ExportGrid(onShare)
     }
     Spacer(Modifier.height(8.dp))
 }
@@ -961,7 +1136,8 @@ private fun ExportButton(label: String, icon: ImageVector, modifier: Modifier, o
 @Composable
 private fun TablePreview(
     rows: List<List<String>>,
-    rowConfidence: (List<String>) -> Float? = { null }
+    rowConfidence: (List<String>) -> Float? = { null },
+    onRowClick: (List<String>) -> Unit = {}
 ) {
     val columnCount = rows.maxOfOrNull { it.size } ?: 0
     Column(
@@ -975,9 +1151,11 @@ private fun TablePreview(
                 // Tint rows whose weakest cell fell below the review threshold.
                 val low = rowConfidence(row)?.let { it < ScanConfidence.LOW } == true
                 Row(
-                    Modifier.background(
-                        if (low) SafetyAmber.copy(alpha = 0.16f) else Color.Transparent
-                    )
+                    Modifier
+                        .background(
+                            if (low) SafetyAmber.copy(alpha = 0.16f) else Color.Transparent
+                        )
+                        .clickable { onRowClick(row) }
                 ) {
                     for (c in 0 until columnCount) {
                         Text(
