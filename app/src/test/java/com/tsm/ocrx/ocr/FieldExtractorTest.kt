@@ -82,4 +82,65 @@ class FieldExtractorTest {
     fun `empty input yields empty fields`() {
         assertEquals(true, FieldExtractor.extract("").isEmpty)
     }
+
+    @Test
+    fun `reads total when label and value are separated by a newline`() {
+        // Two-line receipts where the label is on one line and the amount on the next
+        val text = "รวม\n42.80"
+        val fields = FieldExtractor.extract(text)
+        assertEquals(42.80, fields.total!!, 1e-6)
+    }
+
+    @Test
+    fun `reads total when amount carries a currency symbol prefix`() {
+        val text = "TOTAL\t฿1,250.00"
+        val fields = FieldExtractor.extract(text)
+        assertEquals(1250.00, fields.total!!, 1e-6)
+    }
+
+    @Test
+    fun `reads total when amount has trailing dash style`() {
+        val text = "TOTAL\t1,250.-"
+        val fields = FieldExtractor.extract(text)
+        assertEquals(1250.00, fields.total!!, 1e-6)
+    }
+
+    @Test
+    fun `falls back to bottom-of-page total when no anchor matches`() {
+        // Receipt where OCR mangled the total label completely, but the largest
+        // amount at the bottom is clearly the grand total.
+        val text = """
+            ACME
+            Bolt M8	24.00
+            Nut M8	8.00
+            42.50
+        """.trimIndent()
+        val fields = FieldExtractor.extract(text)
+        assertEquals(42.50, fields.total!!, 1e-6)
+    }
+
+    @Test
+    fun `bottom-of-page fallback stays silent when a larger figure sits above it`() {
+        // Cash tendered (100.00) exceeds the change line at the bottom (35.00); the
+        // mangled total (65.00) cannot be told apart, so no total is reported.
+        val text = """
+            ข้าวผัด	50.00
+            น้ำ	15.00
+            ร@ม	65.00
+            เงินสด	100.00
+            35.00
+        """.trimIndent()
+        assertNull(FieldExtractor.extract(text).total)
+    }
+
+    @Test
+    fun `bottom-of-page fallback ignores bare integers such as phone numbers`() {
+        val text = """
+            ACME
+            Bolt M8	24.00
+            Nut M8	8.00
+            0812345678
+        """.trimIndent()
+        assertNull(FieldExtractor.extract(text).total)
+    }
 }

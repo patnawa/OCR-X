@@ -170,22 +170,29 @@ object FieldExtractor {
     /**
      * The grand total. Searched from the bottom up because a receipt's final total is
      * the last amount printed, and read with subtotal/tax anchors excluded so a
-     * "Total before VAT" line never wins.
+     * "Total before VAT" line never wins. When no anchor survived recognition at all,
+     * a tightly guarded positional fallback is tried — see [bottomAmountFallback].
      */
     private fun findTotal(lines: List<String>): Double? =
-        findAmount(lines.asReversed(), TOTAL_ANCHORS, excluding = SUBTOTAL_ANCHORS + TAX_ANCHORS)
+        findAmount(lines, TOTAL_ANCHORS, excluding = SUBTOTAL_ANCHORS + TAX_ANCHORS, bottomUp = true)
+            ?: bottomAmountFallback(lines)
 
     /**
      * The amount on the first line carrying one of [anchors] and none of [excluding].
      * The rightmost number on the line wins, which is where the value sits in every
-     * receipt layout.
+     * receipt layout. A label printed on its own line with the amount on the next —
+     * common on narrow thermal receipts — is read too, but only when that next line is
+     * nothing but an amount.
      */
     private fun findAmount(
         lines: List<String>,
         anchors: List<String>,
-        excluding: List<String>
+        excluding: List<String>,
+        bottomUp: Boolean = false
     ): Double? {
-        for (line in lines) {
+        val order = if (bottomUp) lines.indices.reversed() else lines.indices
+        for (i in order) {
+            val line = lines[i]
             val lower = line.lowercase()
             val anchor = anchorsIn(lower, anchors) ?: continue
             val excluded = anchorsIn(lower, excluding)
@@ -193,17 +200,67 @@ object FieldExtractor {
             // genuinely different, longer match.
             if (excluded != null && excluded.length > anchor.length) continue
             amountOnLine(line)?.let { return it }
+            lines.getOrNull(i + 1)?.let { next -> bareAmount(next)?.let { return it } }
         }
         return null
     }
 
-    /** Rightmost parseable number on a line, across tab- and space-separated cells. */
+    /**
+     * The grand total when recognition mangled every label it could have carried.
+     *
+     * This is the one place the extractor reads position instead of words, so the
+     * evidence has to be strong before it speaks: the candidate is a line near the
+     * bottom holding nothing but an amount that looks like money (a decimal or
+     * thousands separator, or a currency mark — never a bare integer, which is how
+     * a phone or document number would read), and it must be at least as large as
+     * every other figure on the page, because a receipt's total is its largest
+     * figure. A cash-tendered line above it breaks that rule and the fallback stays
+     * silent, which is the right answer when the evidence is that ambiguous.
+     */
+    private fun bottomAmountFallback(lines: List<String>): Double? {
+        val tail = lines.takeLast(FALLBACK_WINDOW)
+        val candidate = tail.asReversed()
+            .firstNotNullOfOrNull { line -> bareAmount(line)?.takeIf { looksLikeMoney(line) } }
+            ?: return null
+        val others = lines.mapNotNull { amountOnLine(it) }
+        // One figure alone is not a receipt; the total must top real line items.
+        if (others.size < 2 || others.any { it > candidate }) return null
+        return candidate
+    }
+
+    /** Rightmost parseable amount on a line, across tab- and space-separated cells. */
     private fun amountOnLine(line: String): Double? =
         line.split('\t', ' ')
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .asReversed()
-            .firstNotNullOfOrNull { TextCorrector.numericValue(it) }
+            .firstNotNullOfOrNull { parseAmount(it) }
+
+    /** The line's value when the whole line is a single amount and nothing else. */
+    private fun bareAmount(line: String): Double? =
+        parseAmount(line.replace('\t', ' ').trim())
+
+    /**
+     * An amount as receipts print it: [TextCorrector.numericValue] plus the currency
+     * codes it does not know and the Thai "1,250.-" style, where ".-" stands in for
+     * ".00". A trailing bare "-" is left alone — on some systems that marks a
+     * negative, and reading it as positive would be exactly the wrong guess.
+     */
+    private fun parseAmount(token: String): Double? {
+        var s = token.trim().replace(CURRENCY_CODE, "")
+        if (s.endsWith(".-")) s = s.dropLast(2)
+        return TextCorrector.numericValue(s)
+    }
+
+    private fun looksLikeMoney(line: String): Boolean =
+        line.any { it == '.' || it == ',' || Character.getType(it) == Character.CURRENCY_SYMBOL.toInt() } ||
+            CURRENCY_CODE.containsMatchIn(line)
+
+    /** Currency codes written as letters, which the numeric parser cannot tell from text. */
+    private val CURRENCY_CODE = Regex("""^(?:Rp|RM|NT\$|S\$|HK\$)\.?\s*|\s*(?:Rp|RM)$""", RegexOption.IGNORE_CASE)
+
+    /** How far up from the bottom the positional total fallback looks. */
+    private const val FALLBACK_WINDOW = 5
 
     /** The longest anchor present in [lower], or null. */
     private fun anchorsIn(lower: String, anchors: List<String>): String? =

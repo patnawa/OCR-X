@@ -20,6 +20,16 @@ All notable changes to OCR-X are documented here. Versions follow the app's
   golden image, whether the table's row and column counts matched the reference and
   whether vendor, date and total were extracted correctly, alongside CER/WER.
 
+### Changed
+- **Field extraction reads more receipt layouts.** A label printed on its own line
+  with the amount on the next (`รวม` / `42.80`) is read when that next line is
+  nothing but an amount. The Thai `1,250.-` style, where `.-` stands for `.00`, and
+  letter currency codes (`Rp`, `RM`, `S$`, `NT$`, `HK$`) are understood; a trailing
+  bare `-` is still left alone since it can mark a negative. When recognition has
+  mangled every total label, a positional fallback reads a bare money line near the
+  bottom of the page — but only if it is at least as large as every other figure on
+  the page, so a cash-tendered line or a phone number keeps it silent.
+
 ## [1.4] (versionCode 5) — 2026-07-27
 
 ### Changed
