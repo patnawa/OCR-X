@@ -33,7 +33,14 @@ data class OcrResult(
  */
 data class ScanConfidence(
     val overall: Float,
-    val byLine: Map<String, Float>
+    val byLine: Map<String, Float>,
+    /**
+     * 0..1 — how confident the column structure is. High when ruled lines
+     * partitioned the page, lower when gutter detection had weak evidence,
+     * neutral for free-form text. Surfaced as a hint in the scan panel below
+     * 0.5. See [com.tsm.ocrx.ocr.Layout.geometryConfidence] for the rule.
+     */
+    val geometry: Float = 1f
 ) {
     companion object {
         const val LOW = 0.80f    // below this a row/scan is flagged for review

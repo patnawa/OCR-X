@@ -793,6 +793,17 @@ private fun PageCard(
         if (page.status is OcrStatus.Done) {
             Spacer(Modifier.height(10.dp))
             DataTextField(page.text, onTextChange)
+            page.confidence?.let { conf ->
+                if (conf.geometry < 0.5f) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "Geometry: weak — table structure may be off. Re-capture with the camera held flat.",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
         }
     }
 }

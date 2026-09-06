@@ -181,7 +181,7 @@ object PaddleEngine {
         val imagePath = cacheKey?.let { cacheScanImage(context, bitmap, it) }
         return ScanResult(
             text = corrected.text,
-            confidence = ScanConfidence(overall, byLine),
+            confidence = ScanConfidence(overall, byLine, layout.geometryConfidence),
             geometry = ScanGeometry(byLineBox, imagePath, bitmap.width, bitmap.height),
             corrections = corrected.corrections.map { "${it.before} → ${it.after}" },
             failedSumColumns = corrected.failedSums.size
