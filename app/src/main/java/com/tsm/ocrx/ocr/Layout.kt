@@ -38,7 +38,15 @@ data class TextBox(
 data class LayoutResult(
     val text: String,
     val lineConfidence: List<Float>,
-    val lineBoxes: List<TextBox> = emptyList()
+    val lineBoxes: List<TextBox> = emptyList(),
+    /**
+     * How confident the column structure is: 0.95+ when ruled lines carved the
+     * columns; 0.8 when gutter detection found >=2 columns from multi-fragment
+     * rows; 0.5 when a single-column result was returned for a long page (often
+     * a missed gutter); 1.0 for free-form single-column text where one column is
+     * the correct answer. The scan panel surfaces a hint when below 0.5.
+     */
+    val geometryConfidence: Float = 1f
 )
 
 /**
@@ -98,7 +106,8 @@ object Layout {
                 bottom = row.maxOf { it.bottom }
             )
         }
-        return LayoutResult(lineTexts.joinToString("\n"), lineConfidence, lineBoxes)
+        val geomConf = geometryConfidence(rows, bands, columnSeparators)
+        return LayoutResult(lineTexts.joinToString("\n"), lineConfidence, lineBoxes, geomConf)
     }
 
     /**
@@ -243,4 +252,32 @@ object Layout {
     }
 
     private const val MIN_GUTTER_HEIGHT_FACTOR = 1.2f
+
+    /**
+     * Maps column-band evidence to a 0..1 confidence:
+     *  - ruled lines carved out >=2 columns → 0.95 (explicit geometry)
+     *  - gutter detection found >=2 columns on rows with >1 fragment → 0.8
+     *  - gutter detection found >=2 columns on weak evidence → 0.5
+     *  - one band on a long page → 0.7 (uncertain; could be free-form or a missed
+     *    gutter — geometric evidence alone can't tell, so we don't alarm)
+     *  - short page, single band → 1.0 (free-form is the right answer)
+     *
+     * The scan panel surfaces a hint at <0.5, so this signal only fires when the
+     * geometry is genuinely suspect. Calibrate thresholds with real cases later.
+     */
+    private fun geometryConfidence(
+        rows: List<List<PositionedText>>,
+        bands: List<IntRange>,
+        columnSeparators: List<Int>
+    ): Float {
+        val ruledWorked = bands.size >= 2 && columnSeparators.isNotEmpty()
+        val multiFragmentRows = rows.count { it.size > 1 }
+        return when {
+            ruledWorked -> 0.95f
+            bands.size >= 2 && multiFragmentRows >= 2 -> 0.8f
+            bands.size >= 2 -> 0.5f
+            rows.size > 5 -> 0.7f                                 // long single band = uncertain
+            else -> 1.0f                                         // short free-form
+        }
+    }
 }

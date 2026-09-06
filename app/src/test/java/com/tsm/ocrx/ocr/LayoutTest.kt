@@ -1,6 +1,7 @@
 package com.tsm.ocrx.ocr
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -143,5 +144,26 @@ class LayoutTest {
         assertEquals(2, result.lineConfidence.size)
         assertEquals(0.42f, result.lineConfidence[0], 1e-4f)  // dragged down by the bad cell
         assertEquals(0.95f, result.lineConfidence[1], 1e-4f)
+    }
+
+    @Test
+    fun `geometry confidence is high when ruled lines produce columns`() {
+        val items = listOf(
+            box(10,  10,  90, "A"), box(120, 10, 180, "B"),
+            box(10,  40,  90, "C"), box(120, 40, 180, "D")
+        )
+        // Two ruled vertical lines partition the page into three columns
+        val r = Layout.buildReadingOrder(items, columnSeparators = listOf(100, 200))
+        assertTrue("Expected >=0.9, was ${r.geometryConfidence}", r.geometryConfidence >= 0.9f)
+    }
+
+    @Test
+    fun `geometry confidence is at least neutral for free-form text`() {
+        // 7 short single-fragment lines = paragraph-like, no columns expected.
+        // The signal can't reliably distinguish a missed gutter here, so we
+        // stay neutral (>=0.7) rather than alarm on every long page.
+        val items = (0..6).map { i -> box(10, i * 30, 150, "line $i") }
+        val r = Layout.buildReadingOrder(items)
+        assertTrue("Expected >=0.7, was ${r.geometryConfidence}", r.geometryConfidence >= 0.7f)
     }
 }
