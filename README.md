@@ -52,6 +52,10 @@ Current version: **1.4** — see [CHANGELOG.md](CHANGELOG.md).
   translated text can be exported too.
 - **Scan history** — the last 50 sessions are saved and reloadable; the current
   session survives the app being killed in the background.
+- **Save as test cases** — the session's scans, with their text as corrected in the
+  app, can be saved as a zip of golden cases for the on-device accuracy harness
+  (`app/src/androidTest/assets/golden/`). Every correction a user makes becomes a
+  measurement; the manifest reports each raw scan's error rate against it.
 - **Export to CSV / Excel / PDF / JSON / TXT** — saved wherever you choose via the
   system file picker, or sent straight to another app via the share sheet. The
   `.xlsx` and `.pdf` writers are dependency-free.
@@ -117,6 +121,7 @@ app/src/main/java/com/tsm/ocrx/
   export/Exporters.kt      CSV / JSON / TXT
   export/XlsxWriter.kt     Minimal .xlsx writer
   export/PdfExporter.kt    A4 paginated PDF writer
+  export/CorpusExporter.kt Scans + corrected text → golden test-case zip
   model/OcrModels.kt       OcrResult grid + ScanConfidence + ScanGeometry
   ui/theme/Theme.kt        Industrial Material 3 theme
 app/src/test/java/...      JVM unit tests (layout, correction, fields, metrics)

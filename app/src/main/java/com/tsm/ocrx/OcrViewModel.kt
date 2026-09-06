@@ -4,6 +4,8 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.tsm.ocrx.export.CorpusCase
+import com.tsm.ocrx.export.CorpusExporter
 import com.tsm.ocrx.model.OcrResult
 import com.tsm.ocrx.model.ScanConfidence
 import com.tsm.ocrx.model.ScanGeometry
@@ -29,6 +31,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 sealed interface OcrStatus {
     data object Processing : OcrStatus
@@ -61,8 +64,20 @@ data class Page(
     // Scan-time line geometry, backing the row inspector. Also not persisted.
     val geometry: ScanGeometry? = null,
     /** Cells the post-OCR corrector repaired on this page, as "before → after". */
-    val corrections: List<String> = emptyList()
-)
+    val corrections: List<String> = emptyList(),
+    /**
+     * The text exactly as the engine produced it, before any edit. Kept so an edited
+     * page can be told from an untouched one and the raw scan can be scored against
+     * the user's correction. Scan-time only, like [geometry]; null when restored.
+     */
+    val ocrText: String? = null,
+    /** Recognition language the scan was made with, so a test case can reproduce it. */
+    val scanLanguage: OcrLanguage? = null
+) {
+    /** Scanned in this session with its image cached: what a golden test case needs. */
+    val isCorpusCandidate: Boolean
+        get() = status is OcrStatus.Done && text.isNotBlank() && geometry?.imagePath != null
+}
 
 data class OcrUiState(
     val multiMode: Boolean = false,
@@ -424,8 +439,8 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun process(id: Long, uri: Uri) {
-        val update: (OcrStatus, String, ScanConfidence?, ScanGeometry?, List<String>) -> Unit =
-            { status, text, conf, geometry, corrections ->
+        val update: (OcrStatus, String, ScanConfidence?, ScanGeometry?, List<String>, OcrLanguage?) -> Unit =
+            { status, text, conf, geometry, corrections, language ->
                 _state.value = _state.value.copy(
                     pages = _state.value.pages.map {
                         if (it.id == id) it.copy(
@@ -433,23 +448,27 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
                             text = text,
                             confidence = conf,
                             geometry = geometry,
-                            corrections = corrections
+                            corrections = corrections,
+                            // The raw output is fixed at scan time; edits change only `text`.
+                            ocrText = if (status == OcrStatus.Done) text else null,
+                            scanLanguage = language
                         ) else it
                     }
                 )
             }
         try {
+            val language = _state.value.language
             val recognized = OcrEngine.recognize(
                 context = getApplication(),
                 imageUri = uri,
                 mode = _state.value.mode,
-                language = _state.value.language,
+                language = language,
                 settings = _state.value.settings,
                 cacheKey = "page-$id"
             )
             update(
                 OcrStatus.Done, recognized.text, recognized.confidence,
-                recognized.geometry, recognized.corrections
+                recognized.geometry, recognized.corrections, language
             )
             if (recognized.failedSumColumns > 0) {
                 _state.value = _state.value.copy(
@@ -461,7 +480,7 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
                 refreshInstalledModels()
                 update(
                     OcrStatus.Error("Download the ${e.model.displayName} model to scan this script."),
-                    "", null, null, emptyList()
+                    "", null, null, emptyList(), null
                 )
                 return
             }
@@ -471,9 +490,38 @@ class OcrViewModel(app: Application) : AndroidViewModel(app) {
                 .distinct()
                 .joinToString(" ← ")
             android.util.Log.e("OcrX", "OCR failed", e)
-            update(OcrStatus.Error(chain.ifBlank { "OCR failed" }), "", null, null, emptyList())
+            update(OcrStatus.Error(chain.ifBlank { "OCR failed" }), "", null, null, emptyList(), null)
         }
     }
+
+    /* ---- Accuracy corpus ---- */
+
+    /**
+     * The pages of this session that can become golden test cases: those whose
+     * straightened scan image is still on disk. Pages restored after a kill or loaded
+     * from history have text but no image, so there is nothing to measure them
+     * against, and they are left out rather than exported half-formed.
+     *
+     * Case names use the page's id, not its position: positions shift when a page is
+     * removed, and two exports of one session must never give the same name to
+     * different documents.
+     */
+    fun corpusCases(): List<CorpusCase> =
+        _state.value.pages.mapIndexedNotNull { i, page ->
+            if (!page.isCorpusCandidate) return@mapIndexedNotNull null
+            val image = File(page.geometry?.imagePath ?: return@mapIndexedNotNull null)
+            if (!image.isFile) return@mapIndexedNotNull null
+            CorpusCase(
+                index = i + 1,
+                name = CorpusExporter.caseName(sessionId, page.id.toInt()),
+                image = image,
+                text = page.text,
+                language = page.scanLanguage ?: _state.value.language,
+                ocrText = page.ocrText
+            )
+        }
+
+    fun corpusFileName(): String = CorpusExporter.defaultFileName(sessionId)
 
     /**
      * Replaces the source line a rendered table row came from with [newText].

@@ -3,6 +3,23 @@
 All notable changes to OCR-X are documented here. Versions follow the app's
 `versionName` (with `versionCode` in parentheses).
 
+## [Unreleased]
+
+### Added
+- **Save as test cases.** Under **Export**, the pages of the current session can be
+  saved as a zip of golden test cases for the accuracy harness: the straightened,
+  scan-resolution image the recognizer actually saw, the page text as corrected in
+  the app, and the recognition language, in exactly the layout
+  `app/src/androidTest/assets/golden/` reads. Pages whose text was corrected are
+  pre-selected; untouched ones are not, since an unchecked page may still carry
+  errors. A manifest records, per page, whether it was corrected and the raw scan's
+  character error rate against the correction — the first real, on-device accuracy
+  number the app produces. Nothing is collected or sent automatically; the zip
+  contains the scanned documents and goes only where the user saves it.
+- **Harness scores structure and fields.** `OcrAccuracyTest` now also logs, per
+  golden image, whether the table's row and column counts matched the reference and
+  whether vendor, date and total were extracted correctly, alongside CER/WER.
+
 ## [1.4] (versionCode 5) — 2026-07-27
 
 ### Changed

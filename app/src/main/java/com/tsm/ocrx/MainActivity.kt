@@ -44,6 +44,8 @@ import com.canhub.cropper.CropImageContract
 import com.canhub.cropper.CropImageContractOptions
 import com.canhub.cropper.CropImageOptions
 import com.canhub.cropper.CropImageView
+import com.tsm.ocrx.export.CorpusCase
+import com.tsm.ocrx.export.CorpusExporter
 import com.tsm.ocrx.export.ExportFormat
 import com.tsm.ocrx.export.Exporters
 import com.tsm.ocrx.ocr.OcrMode
@@ -216,6 +218,54 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
         exportLauncher.launch("$prefix.${format.extension}")
     }
 
+    // Accuracy corpus: the pages chosen in the dialog, held until the file picker
+    // returns. Deliberately not saveable — the scan images it points at live in the
+    // cache and do not survive process death either, so a restored composition has
+    // nothing to write and says so.
+    var corpusCandidates by remember { mutableStateOf<List<CorpusCase>?>(null) }
+    var pendingCorpus by remember { mutableStateOf<List<CorpusCase>>(emptyList()) }
+
+    fun saveCorpus(cases: List<CorpusCase>, target: Uri) {
+        scope.launch {
+            if (cases.isEmpty()) {
+                snackbar.showSnackbar("Scan images are no longer available — scan again and save before leaving the app")
+                return@launch
+            }
+            val ok = withContext(Dispatchers.IO) {
+                try {
+                    context.contentResolver.openOutputStream(target)?.use { out ->
+                        CorpusExporter.write(cases, out)
+                    } != null
+                } catch (e: Exception) {
+                    false
+                }
+            }
+            snackbar.showSnackbar(
+                if (ok) "Saved ${cases.size} test case${if (cases.size == 1) "" else "s"}"
+                else "Could not save file"
+            )
+        }
+    }
+
+    val corpusLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(CorpusExporter.MIME_TYPE)
+    ) { uri ->
+        if (uri != null) saveCorpus(pendingCorpus, uri)
+        pendingCorpus = emptyList()
+    }
+
+    corpusCandidates?.let { cases ->
+        CorpusExportDialog(
+            cases = cases,
+            onConfirm = { chosen ->
+                corpusCandidates = null
+                pendingCorpus = chosen
+                corpusLauncher.launch(vm.corpusFileName())
+            },
+            onDismiss = { corpusCandidates = null }
+        )
+    }
+
     fun launchCamera() {
         val uri = createImageUri(context)
         pendingCameraPath = uri.toString()
@@ -363,7 +413,14 @@ fun OcrScreen(vm: OcrViewModel = viewModel()) {
                         onRowClick = { row -> inspecting = state.rowSource(row)?.let { it to row } },
                         onCopy = { scope.launch { snackbar.showSnackbar("Text copied") } },
                         onExport = { startExport(it, false) },
-                        onShare = { shareExport(it) }
+                        onShare = { shareExport(it) },
+                        corpusPageCount = state.pages.count { it.isCorpusCandidate },
+                        onSaveCorpus = {
+                            val cases = vm.corpusCases()
+                            if (cases.isEmpty()) scope.launch {
+                                snackbar.showSnackbar("Scan images are no longer available — scan again to save test cases")
+                            } else corpusCandidates = cases
+                        }
                     )
 
                     TranslationPanel(
@@ -882,7 +939,9 @@ private fun ExportSection(
     onRowClick: (List<String>) -> Unit,
     onCopy: () -> Unit,
     onExport: (ExportFormat) -> Unit,
-    onShare: (ExportFormat) -> Unit
+    onShare: (ExportFormat) -> Unit,
+    corpusPageCount: Int,
+    onSaveCorpus: () -> Unit
 ) {
     val clipboard = LocalClipboardManager.current
     val base = if (multiMode) "$pageCount scans · ${rows.size} lines" else "${rows.size} lines"
@@ -949,6 +1008,33 @@ private fun ExportSection(
         SectionLabel("Share")
         Spacer(Modifier.height(10.dp))
         ExportGrid(onShare)
+        // Only scans made in this session still have their image on disk; a restored
+        // or history-loaded session has nothing to build a test case from.
+        if (corpusPageCount > 0) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            Spacer(Modifier.height(10.dp))
+            SectionLabel("Accuracy corpus", "$corpusPageCount page${if (corpusPageCount == 1) "" else "s"}")
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Save the scanned images with their corrected text as test cases, so " +
+                    "recognition accuracy can be measured on real pages.",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(10.dp))
+            OutlinedButton(
+                onClick = onSaveCorpus,
+                shape = ChipShape,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onBackground),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Filled.FactCheck, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("SAVE AS TEST CASES", fontWeight = FontWeight.Bold, letterSpacing = 1.sp, fontSize = 11.sp)
+            }
+        }
     }
     Spacer(Modifier.height(8.dp))
 }

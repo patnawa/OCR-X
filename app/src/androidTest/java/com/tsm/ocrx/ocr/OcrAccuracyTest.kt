@@ -59,6 +59,9 @@ class OcrAccuracyTest {
         )
 
         val scores = mutableListOf<Accuracy.Score>()
+        var structureMatches = 0
+        var fieldMatches = 0
+        var fieldTotal = 0
         for (case in cases) {
             val recognized = recognize(case)
             val score = Accuracy.score(recognized, case.expected)
@@ -69,12 +72,45 @@ class OcrAccuracyTest {
                     case.name, case.language.name, score.cer, score.wer, score.referenceChars
                 )
             )
+
+            // CER says how many characters were wrong; these say whether the export
+            // would have been right. The reference is tab-delimited (the in-app corpus
+            // export writes it that way), so its grid is the expected table.
+            val expectedTable = OcrEngine.parse(case.expected)
+            val actualTable = OcrEngine.parse(recognized)
+            val structureOk = expectedTable.rows.size == actualTable.rows.size &&
+                expectedTable.columnCount == actualTable.columnCount
+            if (structureOk) structureMatches++
+
+            val expectedFields = FieldExtractor.extract(case.expected)
+            val actualFields = FieldExtractor.extract(recognized)
+            val fieldResults = listOf(
+                "vendor" to (expectedFields.vendor == actualFields.vendor),
+                "date" to (expectedFields.documentDate == actualFields.documentDate),
+                "total" to (expectedFields.total == actualFields.total)
+            )
+            fieldMatches += fieldResults.count { it.second }
+            fieldTotal += fieldResults.size
+            Log.i(
+                TAG,
+                "%-28s rows %d/%d cols %d/%d  %s".format(
+                    case.name,
+                    actualTable.rows.size, expectedTable.rows.size,
+                    actualTable.columnCount, expectedTable.columnCount,
+                    fieldResults.joinToString(" ") { (name, ok) -> "$name=${if (ok) "ok" else "MISS"}" }
+                )
+            )
         }
 
         val pooled = Accuracy.pooled(scores)
         Log.i(
             TAG,
             "POOLED over ${scores.size} images: CER=%.4f WER=%.4f".format(pooled.cer, pooled.wer)
+        )
+        Log.i(
+            TAG,
+            "STRUCTURE exact on $structureMatches/${cases.size} images; " +
+                "FIELDS vendor/date/total right $fieldMatches/$fieldTotal"
         )
         assertTrue(
             "Pooled CER %.4f exceeded the %.2f budget".format(pooled.cer, MAX_POOLED_CER),

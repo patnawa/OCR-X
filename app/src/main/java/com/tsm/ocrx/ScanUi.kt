@@ -30,6 +30,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.tsm.ocrx.export.CorpusCase
 import com.tsm.ocrx.ocr.ExtractedFields
 import com.tsm.ocrx.ocr.OcrSettings
 import com.tsm.ocrx.ocr.RecModel
@@ -166,6 +167,119 @@ private fun decodeRegion(source: RowSource): android.graphics.Bitmap? = try {
     }
 } catch (_: Throwable) {
     null
+}
+
+/* ---------------------------------------------------------------------------
+ * Accuracy corpus
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Picks which pages of the session become golden test cases.
+ *
+ * A test case is only worth having if its text is right, so pages the user actually
+ * corrected are pre-selected and untouched ones are not: an unchecked page may be
+ * perfect or may carry errors nobody looked at, and the dialog cannot tell which.
+ * Each row also shows the raw scan's error rate against the correction, which is the
+ * first real accuracy number this app produces for a page.
+ */
+@Composable
+fun CorpusExportDialog(
+    cases: List<CorpusCase>,
+    onConfirm: (List<CorpusCase>) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val selected = remember(cases) {
+        mutableStateListOf<String>().apply { addAll(cases.filter { it.edited }.map { it.name }) }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = {
+            Text(
+                "SAVE AS TEST CASES",
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Black,
+                letterSpacing = 2.sp,
+                fontSize = 14.sp
+            )
+        },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    "Each page is saved as the scanned image plus its text as shown now, " +
+                        "for the accuracy harness. Include only pages whose text you have checked.",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(4.dp))
+                cases.forEach { case ->
+                    val checked = case.name in selected
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                if (checked) selected.remove(case.name) else selected.add(case.name)
+                            },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = checked,
+                            onCheckedChange = null,
+                            colors = CheckboxDefaults.colors(
+                                checkedColor = MaterialTheme.colorScheme.primary
+                            )
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "SCAN ${"%02d".format(case.index)} · ${case.lineCount} lines",
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                corpusCaseSummary(case),
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                color = if (case.edited) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "The file contains the scanned documents themselves.",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 9.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = selected.isNotEmpty(),
+                onClick = { onConfirm(cases.filter { it.name in selected }) }
+            ) {
+                Text("SAVE ZIP", fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("CANCEL", letterSpacing = 1.sp) }
+        }
+    )
+}
+
+/** "corrected · raw scan 3.1% wrong", "unchanged", or "origin unknown". */
+internal fun corpusCaseSummary(case: CorpusCase): String {
+    val cer = case.rawCer ?: return "Origin unknown · text only"
+    return if (case.edited) "Corrected · raw scan ${"%.1f".format(cer * 100)}% wrong"
+    else "Unchanged · not checked?"
 }
 
 /* ---------------------------------------------------------------------------
